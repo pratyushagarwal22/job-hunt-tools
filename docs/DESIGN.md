@@ -36,7 +36,8 @@ job-hunt-tools/
 │   ├── main.py                  # entry point, CLI args (--max-jobs)
 │   ├── service.py               # pipeline orchestration logic
 │   ├── search_client.py         # Serper API (serper.dev)
-│   ├── ats_client.py            # Greenhouse/Lever/Ashby public APIs (list jobs + fetch JDs)
+│   ├── ats_client.py            # Greenhouse/Lever/Ashby public APIs (list call returns jobs with JD text, one call per company)
+│   ├── date_utils.py            # parse relative/absolute date strings → YYYY-MM-DD
 │   ├── jd_client.py             # plain HTTP fetch for non-ATS job pages
 │   ├── scoring_client.py        # Anthropic Haiku structured JSON call
 │   ├── sheets_repo.py           # read/append Google Sheet (Jobs tab only)
@@ -53,7 +54,8 @@ job-hunt-tools/
 │   ├── outreach_client.py       # Claude outreach line drafting
 │   └── sheets_repo.py           # read/append Google Sheet (Contacts tab only)
 ├── shared/
-│   └── sheets.py                # Google Sheets auth + low-level read/append
+│   ├── sheets.py                # Google Sheets auth + low-level read/append
+│   └── linkedin_url.py          # normalize LinkedIn URLs for dedup
 ├── tests/
 │   └── fixtures/                # scrubbed real API responses (JSON)
 ├── _legacy/                     # old broader-search files (gitignored, not used by code)
@@ -72,14 +74,14 @@ job-hunt-tools/
 
 1. Load `queries.yaml`, `companies.yaml`, `config/profile.yaml`, `config/candidate.md`, `settings.yaml`
 2. **Source A — Search API (Serper)**: for each query → call Serper with `tbs=qdr:d` (past 24 hours) and `gl=us` (US-biased results — sets where the search appears to come from, does NOT filter by job location). Paginate up to `max_pages_per_query` pages (default 2, each page is a paid API call). Stop early if a page returns no results.
-3. **Source B — ATS direct**: for each company in `companies.yaml` → call Greenhouse/Lever/Ashby public job list API → keep only jobs posted or updated in the last N days (`ats_lookback_days` in `settings.yaml`, default 3)
+3. **Source B — ATS direct**: for each company in `companies.yaml` → call Greenhouse/Lever/Ashby public job list API → keep only jobs posted in the last N days (`ats_lookback_days` in `settings.yaml`, default 3)
 4. Merge both sources into one list
 5. Normalize URLs (strip utm_, ref, etc.)
 6. Deduplicate: against existing URLs in the "Jobs" sheet AND within the current run
 7. Title keyword filter (include/exclude lists from `settings.yaml`, case-insensitive, whole-word)
 8. Location filter: drop jobs whose location is clearly outside the US (non-US keyword list in `settings.yaml`). For ATS jobs, check the location field. For search results (no structured location field), check the title + snippet text. Keep US locations, "Remote", "Remote - US", and blank/unknown.
-9. Apply score cap (default 50, overridable via `--max-jobs`). Newest jobs first (by `posted_date` if available, else search result order). Over-cap jobs are not written to the sheet.
-10. For each surviving job → fetch full JD (`ats_client.py` for Greenhouse/Lever/Ashby jobs, `jd_client.py` plain HTTP fetch for others). If the JD page can't be fetched or returns almost no text (common on JavaScript-heavy career sites), fall back to scoring from the search result's title + snippet instead. ATS API jobs always have the full JD.
+9. Apply score cap (default 50, overridable via `--max-jobs`). Newest jobs first — sort on the full datetime (not just date); jobs without a posted_date go after all dated jobs, in their original order. Over-cap jobs are not written to the sheet.
+10. For each surviving job → ATS jobs already have full JD text from the list call in step 3. Search-sourced jobs → fetch full JD via `jd_client.py` (plain HTTP fetch). If the JD page can't be fetched or returns almost no text (common on JavaScript-heavy career sites), fall back to scoring from the search result's title + snippet instead.
 11. For each JD (or snippet fallback) → one Haiku call with `config/candidate.md` + `config/profile.yaml` context → structured JSON response
 12. Validate Haiku's JSON response with a pydantic schema. Invalid response = failed job (skip, not written to sheet).
 13. Append new rows to "Jobs" tab (append-only, never overwrite)
@@ -104,7 +106,7 @@ job-hunt-tools/
 
 | Column | Type | Notes |
 |---|---|---|
-| applied | Checkbox | Code appends FALSE. Checkbox formatting set once by hand on the whole column. Never overwritten by code. |
+| applied | Checkbox | Code appends FALSE. Checkbox setup to be confirmed in Task 1 (see Open Risks). Never overwritten by code. |
 | match_score | Number | 1.0–10.0 from Haiku (one decimal, e.g. 7.5) |
 | jd_source | String | "full" (fetched JD or ATS API) or "snippet" (scored from search title + snippet) |
 | title | String | From ATS source data when available; from Haiku for search results |
@@ -114,15 +116,15 @@ job-hunt-tools/
 | core_requirements | String | From Haiku output |
 | reason | String | One-line match reason from Haiku |
 | url | String | Normalized, used as dedup key |
-| posted_date | String | From ATS APIs when available, blank otherwise |
-| date_found | String | Timestamp of this run |
+| posted_date | String | `YYYY-MM-DD`. ATS: from ATS API date field. Search: converted from Serper's relative `date` string using the run's start time. Blank if missing or unparseable. |
+| date_found | String | `YYYY-MM-DD HH:MM` (local time per `timezone` setting in settings.yaml). |
 | source_query | String | Which query or company found this job |
 
 ### Contacts tab
 
 | Column | Type | Notes |
 |---|---|---|
-| contacted | Checkbox | Code appends FALSE. Checkbox formatting set once by hand on the whole column. Never overwritten by code. |
+| contacted | Checkbox | Code appends FALSE. Checkbox setup to be confirmed in Task 1 (see Open Risks). Never overwritten by code. |
 | name | String | From Apollo |
 | company | String | From Apollo |
 | title | String | From Apollo |
@@ -130,7 +132,7 @@ job-hunt-tools/
 | email_status | String | verified / unverified / not found |
 | linkedin_url | String | Input URL, used as dedup key |
 | outreach_line | String | Claude-drafted, blank if --draft not used |
-| date_found | String | Timestamp of this run |
+| date_found | String | `YYYY-MM-DD HH:MM` (local time per `timezone` setting in settings.yaml). |
 
 ## Scoring Rules
 
@@ -157,10 +159,11 @@ Scorer receives two inputs: `config/candidate.md` (one-page evidence doc) and `c
 
 ## Secrets
 
-- **Locally**: `.env` file (gitignored), loaded with `python-dotenv`. Service account JSON is a gitignored file; `.env` holds its path.
+- **Locally**: `.env` file (gitignored), loaded with `python-dotenv`. Service account JSON is a gitignored file; `.env` holds its path via `GOOGLE_APPLICATION_CREDENTIALS`.
+- **Local .env only ever contains the TEST sheet ID.** The real (production) sheet ID exists only in GitHub secrets. There is no `--test` flag: the environment decides which sheet is used, so a local run can never write to the real sheet.
 - **CI**: GitHub Actions secrets, injected as env vars. Service account JSON stored as base64-encoded secret, decoded at runtime.
 - **Gitignored personal files** (`config/profile.yaml`, `config/candidate.md`): stored as GitHub secrets (base64), decoded to files at runtime. `.example` versions committed to show the format.
-- **Google Sheet ID**: env var, not hardcoded.
+- **Google Sheet ID**: env var (`SHEET_ID`), not hardcoded.
 - **SERPER_API_KEY**: env var for the Serper search API.
 - **Never print secrets or file contents in logs.**
 
@@ -177,7 +180,7 @@ Scorer receives two inputs: `config/candidate.md` (one-page evidence doc) and `c
 |---|---|
 | Two job sources (search + ATS direct) | Search finds jobs across the web; ATS direct catches jobs on tracked company boards that search might miss or index late |
 | `ats_lookback_days` default 3 | Prevents old jobs flooding the first run; wide enough to catch anything posted over a weekend |
-| `ats_client.py` separate from `jd_client.py` | One client per external system: ats_client handles Greenhouse/Lever/Ashby APIs (list + fetch), jd_client handles plain HTTP fetches |
+| `ats_client.py` separate from `jd_client.py` | One client per external system: ats_client handles Greenhouse/Lever/Ashby APIs (list call returns jobs with JD text, one call per company); jd_client handles plain HTTP fetches for search-sourced job pages |
 | title/company from source when available | ATS APIs return structured data; Haiku extraction only needed for search results |
 | Pydantic validation on scorer output | Catches malformed Haiku responses before they hit the sheet |
 | `config/` at repo root, gitignored | Personal files (profile.yaml, candidate.md) stay out of repo; .example versions document format |
@@ -194,6 +197,9 @@ Scorer receives two inputs: `config/candidate.md` (one-page evidence doc) and `c
 | No Google scraping with Selenium | Blocked quickly (CAPTCHAs, especially from GitHub Actions IPs), against Google ToS, and brittle. Serper is the paid, reliable alternative |
 | JD snippet fallback for search results | Many career pages are JavaScript-heavy and return no text on plain fetch. Scoring from title + snippet is better than skipping the job entirely |
 | `max_pages_per_query` default 2 | Each page is a paid Serper call; 2 pages balances coverage vs. cost |
+| Greenhouse `first_published` as posted_date | `updated_at` changes whenever an old posting is edited, making old jobs look new. `first_published` reflects the original publish date. Falls back to `updated_at` if `first_published` is missing. |
+| All dates stored in one timezone | `timezone` setting in settings.yaml (default `America/Chicago`). CI runs in UTC; without conversion the 9 PM CT run would show the next day's date. Both `posted_date` and `date_found` use the configured timezone. |
+| Serper dates converted to absolute dates | Serper returns relative strings ("21 hours ago") or absolute ones ("Sep 28, 2026"). Conversion uses the run's start time so all dates in a run are consistent. Unparseable dates → blank `posted_date`. |
 
 ## Open Risks
 
@@ -206,3 +212,4 @@ Scorer receives two inputs: `config/candidate.md` (one-page evidence doc) and `c
 - **Sheet row limits**: Google Sheets caps at ~10M cells. Not a near-term risk, but if you never clean up, the sheet grows forever.
 - **Snippet-based scores are less reliable**: when the full JD can't be fetched, scoring from title + snippet may miss requirements or benefits. The `jd_source` column lets you see which scores are snippet-based.
 - **Haiku output consistency**: structured JSON mode + pydantic validation catches malformed responses. Invalid responses are skipped and retried next run.
+- **Checkbox column append behavior**: if the whole `applied` / `contacted` column is pre-filled with checkboxes (e.g. via Google Sheets data validation on 1000 rows), those cells may be treated as containing FALSE. The append API would then add new rows after the last "filled" row (e.g. row 1001) instead of after the last data row (e.g. row 2). To be investigated and confirmed in Task 1.
