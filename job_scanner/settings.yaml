@@ -1,0 +1,89 @@
+# Pipeline settings — committed to repo.
+# Personal data belongs in config/profile.yaml (gitignored).
+
+max_jobs_per_run: 50
+
+max_pages_per_query: 2
+
+ats_lookback_days: 3
+
+request_timeout_seconds: 15
+
+title_filter:
+  # At least one include keyword must match AND zero exclude keywords must match.
+  # Matching is case-insensitive and whole-word (e.g. "Lead" does not match "Leadership").
+  include:
+    - "Software Engineer"
+    - "Software Developer"
+    - "Software Development Engineer"
+    - "SWE"
+    - "SDE"
+    - "New Grad"
+    - "Forward Deployed"
+    - "Founding Engineer"
+    - "Product Engineer"
+    - "AI Engineer"
+    - "Applied AI"
+    - "Full Stack"
+    - "Full-Stack"
+    - "Fullstack"
+    - "Backend"
+    - "Associate Software Engineer"
+    - "Associate Software Developer"
+    - "Associate Software Development Engineer"
+    - "Junior Software Engineer"
+    - "Software Engineer I"
+    - "SDE I"
+  exclude:
+    - "Staff"
+    - "Principal"
+    - "Lead"
+    - "Manager"
+    - "Director"
+    - "VP"
+    - "Head of"
+    - "Intern"
+    - "Internship"
+    - "Embedded"
+    - "Firmware"
+    - "FPGA"
+    - "Mainframe"
+    - "COBOL"
+
+location_filter:
+  # Drop a job only if its location contains one of these keywords.
+  # Matching is case-insensitive and whole-word.
+  # Jobs with US locations, "Remote", "Remote - US", or blank/unknown pass through.
+  exclude:
+    - "London"
+    - "UK"
+    - "United Kingdom"
+    - "Canada"
+    - "Toronto"
+    - "Vancouver"
+    - "Montreal"
+    - "India"
+    - "Bangalore"
+    - "Bengaluru"
+    - "Hyderabad"
+    - "EMEA"
+    - "APAC"
+    - "LATAM"
+    - "Europe"
+    - "Germany"
+    - "Berlin"
+    - "Dublin"
+    - "Singapore"
+    - "Australia"
+    - "Sydney"
+    - "Mexico"
+    - "Brazil"
+    - "Poland"
+    - "Netherlands"
+    - "Amsterdam"
+    - "Paris"
+    - "France"
+    - "Israel"
+    - "Tel Aviv"
+    - "Japan"
+    - "Tokyo"

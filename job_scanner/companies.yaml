@@ -1,0 +1,251 @@
+# Tracked companies — polled directly via ATS public APIs.
+# Only companies on Greenhouse, Lever, or Ashby are included here.
+# Slug is extracted from the careers_url path.
+
+companies:
+
+  # --- Greenhouse ---
+
+  - name: Hightouch
+    ats: greenhouse
+    slug: hightouch
+
+  - name: Mixpanel
+    ats: greenhouse
+    slug: mixpanel
+
+  - name: Amplitude
+    ats: greenhouse
+    slug: amplitude
+
+  - name: MaintainX
+    ats: greenhouse
+    slug: maintainx
+
+  - name: UpKeep
+    ats: greenhouse
+    slug: upkeep
+
+  - name: Checkr
+    ats: greenhouse
+    slug: checkr
+
+  - name: CB Insights
+    ats: greenhouse
+    slug: cbinsights
+
+  - name: Nova Credit
+    ats: greenhouse
+    slug: novacredit
+
+  - name: Nourish
+    ats: greenhouse
+    slug: usenourish
+
+  - name: Grow Therapy
+    ats: greenhouse
+    slug: growtherapy
+
+  - name: Luma Health
+    ats: greenhouse
+    slug: lumahealth
+
+  - name: Parachute Health
+    ats: greenhouse
+    slug: parachutehealth
+
+  - name: Radar
+    ats: greenhouse
+    slug: radar
+
+  - name: Instabase
+    ats: greenhouse
+    slug: instabase
+
+  - name: Hungryroot
+    ats: greenhouse
+    slug: hungryroot
+
+  - name: Quince
+    ats: greenhouse
+    slug: quince
+
+  - name: Anthropic
+    ats: greenhouse
+    slug: anthropic
+
+  - name: Glean
+    ats: greenhouse
+    slug: gleanwork
+
+  - name: CreativeX
+    ats: greenhouse
+    slug: creativex
+
+  - name: Found
+    ats: greenhouse
+    slug: found
+
+  - name: Altana AI
+    ats: greenhouse
+    slug: altanaai
+
+  - name: Walnut.io
+    ats: greenhouse
+    slug: walnut
+
+  - name: Viam
+    ats: greenhouse
+    slug: viamrobotics
+
+  - name: Pinwheel
+    ats: greenhouse
+    slug: pinwheelapi
+
+  - name: Sigma Computing
+    ats: greenhouse
+    slug: sigmacomputing
+
+  - name: Materialize
+    ats: greenhouse
+    slug: materialize
+
+  - name: Pendo
+    ats: greenhouse
+    slug: pendo
+
+  - name: Stackline
+    ats: greenhouse
+    slug: stackline
+
+  - name: Arkose Labs
+    ats: greenhouse
+    slug: arkoselabs
+
+  - name: AssemblyAI
+    ats: greenhouse
+    slug: assemblyai
+
+  - name: Komodo Health
+    ats: greenhouse
+    slug: komodohealth
+
+  - name: Carta
+    ats: greenhouse
+    slug: carta
+
+  - name: StubHub
+    ats: greenhouse
+    slug: stubhubinc
+
+  # --- Lever ---
+
+  - name: Palantir
+    ats: lever
+    slug: palantir
+
+  - name: Tinybird
+    ats: lever
+    slug: tinybird
+
+  - name: Content Square
+    ats: lever
+    slug: contentsquare
+
+  - name: Bumble
+    ats: lever
+    slug: bumbleinc
+
+  # --- Ashby ---
+
+  - name: Monte Carlo Data
+    ats: ashby
+    slug: montecarlodata
+
+  - name: Astronomer
+    ats: ashby
+    slug: astronomer
+
+  - name: Valon
+    ats: ashby
+    slug: Valon  # NOTE: capital V in URL — verify case sensitivity
+
+  - name: Cohere
+    ats: ashby
+    slug: cohere
+
+  - name: Perplexity
+    ats: ashby
+    slug: perplexity
+
+  - name: Character.AI
+    ats: ashby
+    slug: character
+
+  - name: Vistar Media
+    ats: ashby
+    slug: vistar
+
+  - name: Anrok
+    ats: ashby
+    slug: anrok
+
+  - name: Modern Treasury
+    ats: ashby
+    slug: moderntreasury
+
+  - name: Traba
+    ats: ashby
+    slug: traba
+
+  - name: PermitFlow
+    ats: ashby
+    slug: permitflow
+
+  - name: Aquant
+    ats: ashby
+    slug: Aquant  # NOTE: capital A in URL — verify case sensitivity
+
+  - name: Vic.ai
+    ats: ashby
+    slug: Vic.ai  # NOTE: dots and capitals in URL — verify
+
+  - name: Arch
+    ats: ashby
+    slug: arch.co  # NOTE: dot in slug — verify
+
+  - name: Sandbar
+    ats: ashby
+    slug: sandbar
+
+  - name: Datafold
+    ats: ashby
+    slug: datafold
+
+  - name: Atlan
+    ats: ashby
+    slug: atlan
+
+  - name: Anyscale
+    ats: ashby
+    slug: anyscale
+
+  - name: Hims & Hers
+    ats: ashby
+    slug: hims-and-hers
+
+  - name: Hinge Health
+    ats: ashby
+    slug: hinge-health
+
+  - name: SentiLink
+    ats: ashby
+    slug: sentilink
+
+  - name: Middesk
+    ats: ashby
+    slug: middesk
+
+  - name: Writer
+    ats: ashby
+    slug: writer

@@ -1,0 +1,25 @@
+# Secrets
+.env
+*.json.b64
+service_account*.json
+credentials*.json
+
+# Personal files (only the .example versions get committed)
+config/profile.yaml
+config/candidate.md
+
+# Old inputs, never commit
+_legacy/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+.cursor/

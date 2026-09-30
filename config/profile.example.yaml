@@ -1,0 +1,50 @@
+candidate:
+  full_name: "Jane Doe"
+  location: "San Francisco, CA"
+  visa_status: "US Citizen"
+  work_authorization: "No sponsorship needed"
+
+target_roles:
+  primary:
+    - "Software Engineer"
+    - "Software Development Engineer"
+    - "Software Developer"
+    - "New Grad Software Engineer"
+    - "Forward Deployed Engineer"
+    - "Founding Engineer"
+    - "Product Engineer"
+    - "Applied AI Engineer"
+
+  archetypes:
+    - name: "Software Engineer"
+      level: "Entry"
+      fit: "primary"
+    - name: "Forward Deployed Engineer"
+      level: "Entry"
+      fit: "primary"
+    - name: "Founding Engineer"
+      level: "Entry"
+      fit: "primary"
+
+ai_evaluation:
+  software_engineering_track:
+    active: true
+    cloud_data_platform_swe_floor: true
+    summary: >
+      Brief description of your background, pivot context, and what the scorer
+      should weigh. Mention transferable skills, projects, and experience level.
+    score_swe_below_six_only_when:
+      - "The posting clearly requires more than N years AND targets mid/senior/staff."
+      - "Hard blockers: clearance, visa issues, or role is non-engineering."
+    cloud_data_platform_swe_floor_when:
+      - "role_family is SWE and the domain is cloud/data/ML/AI."
+    fde_floor_when:
+      - "Role is Forward Deployed Engineer or similar."
+    startup_swe_floor_when:
+      - "Founding/Product Engineer at a startup with no minimum above N years."
+    us_location:
+      - "Location within the US is NEVER a scoring penalty."
+      - "A job based outside the US is a hard blocker (score 1-2)."
+      - "Your preferred metro area: scoring bonus."
+    otherwise_for_swe:
+      - "How to treat SWE roles when level is early-career or unspecified."
