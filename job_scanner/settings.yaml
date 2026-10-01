@@ -9,6 +9,8 @@ ats_lookback_days: 3
 
 request_timeout_seconds: 15
 
+jd_min_chars: 500
+
 timezone: America/Chicago
 
 title_filter:
