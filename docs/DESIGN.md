@@ -74,12 +74,12 @@ job-hunt-tools/
 
 1. Load `queries.yaml`, `companies.yaml`, `config/profile.yaml`, `config/candidate.md`, `settings.yaml`
 2. **Source A — Search API (Serper)**: for each query → call Serper with `tbs=qdr:d` (past 24 hours) and `gl=us` (US-biased results — sets where the search appears to come from, does NOT filter by job location). Paginate up to `max_pages_per_query` pages (default 2, each page is a paid API call). Stop early if a page returns no results.
-3. **Source B — ATS direct**: for each company in `companies.yaml` → call Greenhouse/Lever/Ashby public job list API → keep only jobs posted in the last N days (`ats_lookback_days` in `settings.yaml`, default 3)
+3. **Source B — ATS direct**: for each company in `companies.yaml` → call Greenhouse/Lever/Ashby public job list API → keep only jobs posted in the last N days (`ats_lookback_days` in `settings.yaml`, default 3). Date fields: Greenhouse `first_published` (fallback `updated_at`), Lever `createdAt` (Unix ms), Ashby `publishedAt`. `posted_date` is kept as the raw API value; `date_utils.py` parses it
 4. Merge both sources into one list
 5. Normalize URLs (strip utm_, ref, etc.)
 6. Deduplicate: against existing URLs in the "Jobs" sheet AND within the current run
 7. Title keyword filter (include/exclude lists from `settings.yaml`, case-insensitive, whole-word)
-8. Location filter: drop jobs whose location is clearly outside the US (non-US keyword list in `settings.yaml`). For ATS jobs, check the location field. For search results (no structured location field), check the title + snippet text. Keep US locations, "Remote", "Remote - US", and blank/unknown.
+8. Location filter: drop jobs whose location is clearly outside the US (non-US keyword list in `settings.yaml`). For ATS jobs, check the location field. For search results (no structured location field), check the title + snippet text and the URL (catches locations in URLs, e.g. NVIDIA's `Taiwan-Taipei` or Google's `?location=India`). Keep US locations, "Remote", "Remote - US", and blank/unknown.
 9. Apply score cap (default 50, overridable via `--max-jobs`). Newest jobs first — sort on the full datetime (not just date); jobs without a posted_date go after all dated jobs, in their original order. Over-cap jobs are not written to the sheet.
 10. For each surviving job → ATS jobs already have full JD text from the list call in step 3. Search-sourced jobs → fetch full JD via `jd_client.py` (plain HTTP fetch). If the JD page can't be fetched or returns almost no text (common on JavaScript-heavy career sites), fall back to scoring from the search result's title + snippet instead.
 11. For each JD (or snippet fallback) → one Haiku call with `config/candidate.md` + `config/profile.yaml` context → structured JSON response

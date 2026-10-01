@@ -142,6 +142,10 @@ companies:
     ats: greenhouse
     slug: pinterest
 
+  - name: Reddit
+    ats: greenhouse
+    slug: reddit
+
   # --- Lever ---
 
   - name: Palantir
@@ -159,6 +163,10 @@ companies:
   - name: Bumble
     ats: lever
     slug: bumbleinc
+
+  - name: Spotify
+    ats: lever
+    slug: spotify
 
   # --- Ashby ---
 

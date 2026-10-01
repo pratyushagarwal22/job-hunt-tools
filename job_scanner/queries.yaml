@@ -102,14 +102,6 @@ company_sites:
     query: 'site:explore.jobs.netflix.net ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad")'
     enabled: true
 
-  - name: Spotify
-    query: 'site:lifeatspotify.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad")'
-    enabled: true
-
   - name: Snap
     query: 'site:careers.snap.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad")'
-    enabled: true
-
-  - name: Reddit
-    query: 'site:redditinc.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad")'
     enabled: true

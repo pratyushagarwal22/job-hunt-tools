@@ -149,16 +149,19 @@ pytest tests/test_search_client.py -v
 **Out of scope**: No title filter, no location filter, no dedup, no scoring. Client returns a list of job dicts with normalized fields: `title`, `company`, `location`, `url`, `posted_date`, `jd_text`, `source` ("greenhouse"/"lever"/"ashby").
 
 **What ats_client.py exposes**:
-- `list_greenhouse_jobs(slug: str, lookback_days: int) -> list[dict]`
-- `list_lever_jobs(slug: str, lookback_days: int) -> list[dict]`
-- `list_ashby_jobs(slug: str, lookback_days: int) -> list[dict]`
+- `list_greenhouse_jobs(slug: str, company: str, lookback_days: int, timeout: float = 15) -> list[dict]`
+- `list_lever_jobs(slug: str, company: str, lookback_days: int, timeout: float = 15) -> list[dict]`
+- `list_ashby_jobs(slug: str, company: str, lookback_days: int, timeout: float = 15) -> list[dict]`
+- `company` is the display name from `companies.yaml`. `timeout` is wired to `request_timeout_seconds` in settings later.
 - No separate `fetch_*_jd` functions. Each list call returns jobs with JD text included (one API call per company, not two).
 - Each list function calls the public API, filters by `posted_date >= now - lookback_days`, and returns structured dicts.
+- `posted_date` is the raw API value (ISO string, or Unix ms int for Lever). A temporary private `_parse_posted` is used only for the lookback filter; `date_utils` (Task 4) replaces it. Jobs with no date are dropped.
+- Bad slug / non-2xx / request error: log a warning with slug + status and return `[]`. One company never crashes the run.
 
 **API endpoints** (public, no auth needed):
 - Greenhouse: `GET https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true` — single call returns list with JD HTML in each job's `content` field. Posted date field: `first_published` (preferred — reflects original publish date). Falls back to `updated_at` if `first_published` is missing. Do not use `updated_at` as primary — it changes whenever an old posting is edited, making old jobs look new.
 - Lever: `GET https://api.lever.co/v0/postings/{slug}` — list already includes full posting content. Posted date field: `createdAt` (Unix ms).
-- Ashby: `GET https://api.ashbyhq.com/posting-api/job-board/{slug}` — public posting API, not the internal GraphQL endpoint. Posted date field: `publishedDate`.
+- Ashby: `GET https://api.ashbyhq.com/posting-api/job-board/{slug}` — public posting API, not the internal GraphQL endpoint. Posted date field: `publishedAt`.
 
 **Verification** (one real call per ATS):
 ```bash
@@ -174,7 +177,7 @@ if raw.get('jobs'):
 
 # Then verify the normalized output from ats_client
 from job_scanner.ats_client import list_greenhouse_jobs
-jobs = list_greenhouse_jobs('anthropic', lookback_days=7)
+jobs = list_greenhouse_jobs('anthropic', 'Anthropic', lookback_days=7)
 print(f'Greenhouse (anthropic): {len(jobs)} jobs in last 7 days')
 if jobs:
     j = jobs[0]
@@ -189,7 +192,7 @@ if jobs:
 python -c "
 from job_scanner.ats_client import list_lever_jobs
 import json
-jobs = list_lever_jobs('palantir', lookback_days=7)
+jobs = list_lever_jobs('palantir', 'Palantir', lookback_days=7)
 print(f'Lever (palantir): {len(jobs)} jobs in last 7 days')
 if jobs:
     j = jobs[0]
@@ -201,7 +204,7 @@ if jobs:
 python -c "
 from job_scanner.ats_client import list_ashby_jobs
 import json
-jobs = list_ashby_jobs('cohere', lookback_days=7)
+jobs = list_ashby_jobs('cohere', 'Cohere', lookback_days=7)
 print(f'Ashby (cohere): {len(jobs)} jobs in last 7 days')
 if jobs:
     j = jobs[0]
@@ -214,7 +217,7 @@ python -c "
 from job_scanner.ats_client import list_ashby_jobs
 for slug in ['Valon', 'Aquant', 'Vic.ai', 'arch.co']:
     try:
-        jobs = list_ashby_jobs(slug, lookback_days=30)
+        jobs = list_ashby_jobs(slug, slug, lookback_days=30)
         print(f'{slug}: {len(jobs)} jobs (OK)')
     except Exception as e:
         print(f'{slug}: ERROR — {e}')
@@ -237,6 +240,7 @@ pytest tests/test_ats_client.py -v
 - `job_scanner/title_filter.py` (new)
 - `job_scanner/location_filter.py` (new)
 - `job_scanner/date_utils.py` (new)
+- `job_scanner/ats_client.py` (edit — replace `_parse_posted` with `date_utils.parse_ats_date`)
 - `job_scanner/settings.yaml` (edit — add `timezone` key, value `America/Chicago`)
 - `tests/test_url_utils.py` (new)
 - `tests/test_title_filter.py` (new)
@@ -254,11 +258,11 @@ pytest tests/test_ats_client.py -v
 - `passes_title_filter(title: str, include: list[str], exclude: list[str]) -> bool` — case-insensitive, whole-word matching. Must match at least one include keyword and zero exclude keywords.
 
 `location_filter.py`:
-- `passes_location_filter(location: str | None, title: str, snippet: str, exclude_keywords: list[str], is_ats: bool) -> bool` — for ATS jobs, check `location` field only. For search jobs, check `title + snippet`. Blank/unknown/Remote passes.
+- `passes_location_filter(location: str | None, title: str, snippet: str, url: str, exclude_keywords: list[str], is_ats: bool) -> bool` — for ATS jobs, check `location` field only. For search jobs, check `title + snippet + url` (catches locations in URLs, e.g. NVIDIA's `Taiwan-Taipei` path or Google's `?location=India`). Blank/unknown/Remote passes.
 
 `date_utils.py`:
 - `parse_relative_date(date_str: str, run_start: datetime) -> datetime | None` — converts Serper's `date` field to a timezone-aware `datetime`. `run_start` must be tz-aware. Handles: relative strings ("21 hours ago", "3 days ago", "1 week ago", "just now") and absolute strings ("Sep 28, 2026" → midnight in the configured timezone). Returns `None` for unparseable input.
-- `parse_ats_date(value: str | int, tz_name: str) -> datetime | None` — accepts ISO 8601 strings and Unix ms ints (Lever's `createdAt` is Unix ms). Returns a tz-aware `datetime` in the configured timezone, or `None`.
+- `parse_ats_date(value: str | int, tz_name: str) -> datetime | None` — accepts ISO 8601 strings and Unix ms ints (Lever's `createdAt` is Unix ms). Returns a tz-aware `datetime` in the configured timezone, or `None`. Takes the raw `posted_date` from `ats_client` and replaces its temporary `_parse_posted` (switch `ats_client`'s lookback filter to this function in this task).
 - `format_posted_date(dt: datetime, tz_name: str) -> str` — returns `YYYY-MM-DD` in the configured timezone.
 - `format_date_found(dt: datetime, tz_name: str) -> str` — returns `YYYY-MM-DD HH:MM` in the configured timezone.
 - The `timezone` setting (e.g. `America/Chicago`) is read from `settings.yaml`. Add a `timezone` key to `settings.yaml` in this task.
@@ -270,7 +274,7 @@ pytest tests/test_url_utils.py tests/test_title_filter.py tests/test_location_fi
 **Expected**: All tests pass. Test cases cover:
 - `url_utils`: utm stripping, ref removal, source removal, gh_src removal, trailing slash, fragment removal, mixed case domain, idempotency. **Critical test**: two URLs differing only by `gh_jid` must stay different after normalization (e.g. `https://company.com/jobs?gh_jid=123` vs `https://company.com/jobs?gh_jid=456` → two distinct normalized URLs).
 - `title_filter`: exact match, partial non-match (e.g., "Lead" does not match "Leadership"), case insensitivity, exclude overrides include, no include match → fail.
-- `location_filter`: "London" → fail, "Remote" → pass, "New York, NY" → pass, blank → pass, "Bangalore, India" → fail, ATS mode checks only location field, search mode checks title+snippet.
+- `location_filter`: "London" → fail, "Remote" → pass, "New York, NY" → pass, blank → pass, "Bangalore, India" → fail, ATS mode checks only location field, search mode checks title+snippet+url (e.g. URL containing `Taiwan-Taipei` or `?location=India` → fail).
 - `date_utils`: all parsers return tz-aware datetimes (not bare dates) so Task 7 can sort on full datetime. "21 hours ago" at a 9:00 AM CT run → tz-aware datetime of the previous day at 6 PM CT. "3 days ago" → 3 days before run_start. "1 week ago" → 7 days before. "just now" → run_start. Absolute date "Sep 28, 2026" → midnight CT on that date. Unparseable string → `None`. `parse_ats_date` with a UTC ISO string → CT datetime. `parse_ats_date` with a Unix ms int (Lever) → CT datetime. `format_posted_date` → `YYYY-MM-DD`.
 
 ---
