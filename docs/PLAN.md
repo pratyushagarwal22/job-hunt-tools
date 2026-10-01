@@ -231,7 +231,7 @@ pytest tests/test_ats_client.py -v
 
 ---
 
-## Task 4: Pure Logic — URL Normalize, Dedup, Title Filter, Location Filter, Date Utils, Cap
+## Task 4: Pure Logic — URL Normalize, Title Filter, Location Filter, Date Utils
 
 **Goal**: Build all the cheap pre-scoring filters, the URL normalizer, and the date conversion module. 100% unit-tested, no external calls.
 
@@ -275,7 +275,7 @@ pytest tests/test_url_utils.py tests/test_title_filter.py tests/test_location_fi
 - `url_utils`: utm stripping, ref removal, source removal, gh_src removal, trailing slash, fragment removal, mixed case domain, idempotency. **Critical test**: two URLs differing only by `gh_jid` must stay different after normalization (e.g. `https://company.com/jobs?gh_jid=123` vs `https://company.com/jobs?gh_jid=456` → two distinct normalized URLs).
 - `title_filter`: exact match, partial non-match (e.g., "Lead" does not match "Leadership"), case insensitivity, exclude overrides include, no include match → fail.
 - `location_filter`: "London" → fail, "Remote" → pass, "New York, NY" → pass, blank → pass, "Bangalore, India" → fail, ATS mode checks only location field, search mode checks title+snippet+url (e.g. URL containing `Taiwan-Taipei` or `?location=India` → fail).
-- `date_utils`: all parsers return tz-aware datetimes (not bare dates) so Task 7 can sort on full datetime. "21 hours ago" at a 9:00 AM CT run → tz-aware datetime of the previous day at 6 PM CT. "3 days ago" → 3 days before run_start. "1 week ago" → 7 days before. "just now" → run_start. Absolute date "Sep 28, 2026" → midnight CT on that date. Unparseable string → `None`. `parse_ats_date` with a UTC ISO string → CT datetime. `parse_ats_date` with a Unix ms int (Lever) → CT datetime. `format_posted_date` → `YYYY-MM-DD`.
+- `date_utils`: all parsers return tz-aware datetimes (not bare dates) so Task 7 can sort on full datetime. "21 hours ago" at a 9:00 AM CT run → tz-aware datetime of the previous day at noon CT. "3 days ago" → 3 days before run_start. "1 week ago" → 7 days before. "just now" → run_start. Absolute date "Sep 28, 2026" → midnight CT on that date. Unparseable string → `None`. `parse_ats_date` with a UTC ISO string → CT datetime. `parse_ats_date` with a Unix ms int (Lever) → CT datetime. `format_posted_date` → `YYYY-MM-DD`.
 
 ---
 
@@ -391,7 +391,7 @@ pytest tests/test_scoring_client.py -v
 
 `service.py`:
 - `run_pipeline(max_jobs: int | None) -> dict` — full pipeline:
-  1. Load configs (queries.yaml — both `queries` and `company_sites` sections, companies.yaml, profile.yaml, candidate.md, settings.yaml)
+  1. Load configs (queries.yaml — both `queries` and `company_sites` sections, companies.yaml, profile.yaml, candidate.md, settings.yaml). Create `run_start` once, tz-aware in the configured timezone: `datetime.now(ZoneInfo(settings["timezone"]))`. Pass it to every `date_utils.parse_relative_date` call (absolute Serper dates become midnight in `run_start`'s timezone, so it must not be UTC or naive).
   2. Source A: run all enabled search queries AND company_sites queries. Pagination loop lives here in service.py (not in search_client.py): for each query, call `search_client.search()` up to `max_pages_per_query` times, stopping early if a page returns no results.
   3. Source B: poll all companies from companies.yaml via ats_client (JD text is already included in each list call — no separate fetch step for ATS jobs)
   4. Merge, normalize URLs, dedup (against sheet + within run)

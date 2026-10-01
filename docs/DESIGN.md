@@ -37,7 +37,7 @@ job-hunt-tools/
 │   ├── service.py               # pipeline orchestration logic
 │   ├── search_client.py         # Serper API (serper.dev)
 │   ├── ats_client.py            # Greenhouse/Lever/Ashby public APIs (list call returns jobs with JD text, one call per company)
-│   ├── date_utils.py            # parse relative/absolute date strings → YYYY-MM-DD
+│   ├── date_utils.py            # parsers → tz-aware datetimes; formatters → YYYY-MM-DD / YYYY-MM-DD HH:MM strings
 │   ├── jd_client.py             # plain HTTP fetch for non-ATS job pages
 │   ├── scoring_client.py        # Anthropic Haiku structured JSON call
 │   ├── sheets_repo.py           # read/append Google Sheet (Jobs tab only)

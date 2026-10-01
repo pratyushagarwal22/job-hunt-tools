@@ -7,6 +7,8 @@ from datetime import datetime, timedelta, timezone
 import requests
 from bs4 import BeautifulSoup
 
+from job_scanner import date_utils
+
 logger = logging.getLogger(__name__)
 
 _GREENHOUSE_URL = "https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true"
@@ -113,24 +115,11 @@ def _lever_jd_text(item: dict) -> str:
     return "\n\n".join(p.strip() for p in parts if p and p.strip())
 
 
-def _parse_posted(value) -> datetime | None:
-    # Temporary: Task 4's date_utils replaces this.
-    if value is None or value == "":
-        return None
-    try:
-        if isinstance(value, (int, float)):
-            return datetime.fromtimestamp(value / 1000, tz=timezone.utc)
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except (ValueError, OverflowError, OSError):
-        return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-
-
 def _within_lookback(jobs: list[dict], lookback_days: int) -> list[dict]:
     cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
     kept = []
     for job in jobs:
-        posted = _parse_posted(job["posted_date"])
+        posted = date_utils.parse_ats_date(job["posted_date"], "UTC")
         if posted is not None and posted >= cutoff:
             kept.append(job)
     return kept

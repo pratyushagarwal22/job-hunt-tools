@@ -9,6 +9,8 @@ ats_lookback_days: 3
 
 request_timeout_seconds: 15
 
+timezone: America/Chicago
+
 title_filter:
   # At least one include keyword must match AND zero exclude keywords must match.
   # Matching is case-insensitive and whole-word (e.g. "Lead" does not match "Leadership").
@@ -54,36 +56,85 @@ location_filter:
   # Drop a job only if its location contains one of these keywords.
   # Matching is case-insensitive and whole-word.
   # Jobs with US locations, "Remote", "Remote - US", or blank/unknown pass through.
+  # Names shared with a US place that posts real software jobs are only matched in
+  # narrowed forms: Mexico (New Mexico), Dublin (Dublin CA/OH), Vancouver (Vancouver WA).
+  # No bare "Ontario" (Ontario CA) or "England" (New England).
   exclude:
-    - "London"
-    - "UK"
-    - "United Kingdom"
-    - "Canada"
-    - "Toronto"
-    - "Vancouver"
-    - "Montreal"
-    - "India"
-    - "Bangalore"
-    - "Bengaluru"
-    - "Hyderabad"
+    # Regions
     - "EMEA"
     - "APAC"
     - "LATAM"
     - "Europe"
+    # UK / Ireland
+    - "UK"
+    - "United Kingdom"
+    - "London"
+    - "Ireland"
+    # Canada
+    - "Canada"
+    - "Toronto"
+    - "Vancouver, BC"
+    - "British Columbia"
+    - "Montreal"
+    - "Montréal"
+    - "Quebec"
+    - "Québec"
+    # India
+    - "India"
+    - "Bangalore"
+    - "Bengaluru"
+    - "Hyderabad"
+    - "Pune"
+    # Europe
     - "Germany"
     - "Berlin"
-    - "Dublin"
+    - "Munich"
+    - "München"
+    - "France"
+    - "Paris"
+    - "Netherlands"
+    - "Amsterdam"
+    - "Spain"
+    - "Madrid"
+    - "Barcelona"
+    - "Switzerland"
+    - "Zurich"
+    - "Zürich"
+    - "Poland"
+    - "Polska"
+    - "Warsaw"
+    - "Warszawa"
+    - "Krakow"
+    - "Kraków"
+    - "Wroclaw"
+    - "Wrocław"
+    - "Gdansk"
+    - "Gdańsk"
+    # Middle East / Africa
+    - "Israel"
+    - "Tel Aviv"
+    - "Haifa"
+    - "Egypt"
+    # Asia-Pacific
     - "Singapore"
     - "Australia"
     - "Sydney"
-    - "Mexico"
-    - "Brazil"
-    - "Poland"
-    - "Netherlands"
-    - "Amsterdam"
-    - "Paris"
-    - "France"
-    - "Israel"
-    - "Tel Aviv"
     - "Japan"
     - "Tokyo"
+    - "Taiwan"
+    - "Taipei"
+    - "China"
+    - "Korea"
+    - "Seoul"
+    - "Shanghai"
+    - "Beijing"
+    # Latin America
+    - "Mexico City"
+    - "CDMX"
+    - "Guadalajara"
+    - "Monterrey"
+    - "Brazil"
+    - "Brasil"
+    - "Sao Paulo"
+    - "São Paulo"
+    - "Rio de Janeiro"
