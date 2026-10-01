@@ -13,6 +13,11 @@ jd_min_chars: 500
 
 timezone: America/Chicago
 
+scoring:
+  model: claude-haiku-4-5-20251001
+  max_tokens: 1024
+  max_jd_chars: 15000
+
 title_filter:
   # At least one include keyword must match AND zero exclude keywords must match.
   # Matching is case-insensitive and whole-word (e.g. "Lead" does not match "Leadership").

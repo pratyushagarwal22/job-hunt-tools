@@ -1,0 +1,45 @@
+{
+  "id": "msg_SCRUBBED",
+  "container": null,
+  "content": [
+    {
+      "id": "toolu_SCRUBBED",
+      "caller": {
+        "type": "direct"
+      },
+      "input": {
+        "title": "Software Engineer I",
+        "company": "OneStream",
+        "location": "Unknown",
+        "visa_mention": "Not mentioned",
+        "core_requirements": "Unknown",
+        "match_score": 6.5,
+        "reason": "New grad SWE I role at established enterprise company; candidate has strong SWE fundamentals, full-stack + cloud background, and meets level; incomplete JD limits precision."
+      },
+      "name": "record_job_score",
+      "type": "tool_use",
+      "toolset_name": null
+    }
+  ],
+  "diagnostics": null,
+  "model": "claude-haiku-4-5-20251001",
+  "role": "assistant",
+  "stop_details": null,
+  "stop_reason": "tool_use",
+  "stop_sequence": null,
+  "type": "message",
+  "usage": {
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 0,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "inference_geo": "not_available",
+    "input_tokens": 4125,
+    "output_tokens": 183,
+    "output_tokens_details": null,
+    "server_tool_use": null,
+    "service_tier": "standard"
+  }
+}
