@@ -446,11 +446,11 @@ python -m job_scanner.main --max-jobs 2
 - `CANDIDATE_MD_B64` (base64-encoded config/candidate.md)
 
 **Workflow behavior**:
-1. Cron: runs at two times daily (e.g. `0 14 * * *` and `0 2 * * *` UTC = 9 AM and 9 PM CT).
+1. Cron: two schedule entries — `cron: '7 9 * * *'` and `cron: '7 21 * * *'`, each with `timezone: "America/Chicago"` (9:07 AM and 9:07 PM Chicago time, DST handled automatically; off the hour because top-of-hour scheduled runs are often delayed).
 2. `workflow_dispatch`: manual trigger with optional `max_jobs` input.
 3. `concurrency`: group `job-scanner` with `cancel-in-progress: false`. Prevents two runs (e.g. a cron trigger and a manual "Run workflow" click) from overlapping and both appending the same jobs to the real sheet. The second run queues until the first finishes.
 4. `timeout-minutes: 20` — prevents a hung run from burning Actions minutes indefinitely.
-5. Setup: checkout, Python 3.12, pip install.
+5. Setup: checkout, Python 3.13, pip install.
 6. Decode secrets: write `GOOGLE_SERVICE_ACCOUNT_B64` → `service_account.json`, `PROFILE_YAML_B64` → `config/profile.yaml`, `CANDIDATE_MD_B64` → `config/candidate.md`.
 7. Set env vars: `SERPER_API_KEY`, `ANTHROPIC_API_KEY`, `SHEET_ID`, `GOOGLE_APPLICATION_CREDENTIALS=service_account.json`.
 8. Run: `python -m job_scanner.main` (or with `--max-jobs ${{ inputs.max_jobs }}` if provided).
@@ -474,7 +474,7 @@ python -c "import yaml; yaml.safe_load(open('.github/workflows/scan.yaml'))"
 # Expected: second run queues (status "queued"), does NOT cancel the first.
 ```
 
-**Cron times note**: `0 14 * * *` = 9:00 AM CT (CDT, UTC-5) / 8:00 AM CT (CST, UTC-6). `0 2 * * *` = 9:00 PM CT (CDT) / 8:00 PM CT (CST). Adjust if you want different local times.
+**Cron times note**: The `timezone` field makes GitHub convert automatically — no manual UTC math, no DST drift.
 
 ---
 
