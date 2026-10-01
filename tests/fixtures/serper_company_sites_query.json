@@ -1,0 +1,84 @@
+{
+  "searchParameters": {
+    "q": "site:amazon.jobs (\"Software Engineer\" OR \"New Grad\")",
+    "gl": "us",
+    "type": "search",
+    "num": 10,
+    "page": 1,
+    "tbs": "qdr:d",
+    "engine": "google"
+  },
+  "organic": [
+    {
+      "title": "Job search | Amazon.jobs",
+      "link": "https://www.amazon.jobs/en/search?base_query=full+stack+development&loc_query=",
+      "snippet": "Software Engineer II, Leo Commerce \u00b7 3+ years of non-internship professional software development experience \u00b7 2+ years of non-internship design or architecture ( ...",
+      "date": "17 hours ago",
+      "position": 1
+    },
+    {
+      "title": "Softwareentwicklung",
+      "link": "https://amazon.jobs/content/de/job-categories/software-development",
+      "snippet": "Sr Software Engineer, AWS Applied AI Solutions \u2013 Core Services. Seattle, WA ... Senior Software Engineer, SageMaker AI Studio. Santa Clara, CA, USA. +1 ...",
+      "date": "21 hours ago",
+      "position": 2
+    },
+    {
+      "title": "Software Dev Engineer, EC2 Nitro, EC2 Nitro - Job ID",
+      "link": "https://amazon.jobs/en-gb/jobs/10566686/software-dev-engineer-ec2-nitro-ec2-nitro",
+      "snippet": "We are looking for an experienced software engineer to drive development for new EC2 machine learning platforms. In this role, the engineer will work with a ...",
+      "date": "3 hours ago",
+      "position": 3
+    },
+    {
+      "title": "IT App Dev Engr III - AMZ10430591 - Job ID: 10566016",
+      "link": "https://www.amazon.jobs/en/jobs/10566016/it-app-dev-engr-iii-amz10430591",
+      "snippet": "... Software Engineer or Developer, or a related occupation. Must have two years of experience in the following skills: (1) hands-on experience in SQL; (2) IBM ...",
+      "date": "21 hours ago",
+      "position": 4
+    },
+    {
+      "title": "Forward Deployed Engineering Manager, AWS ...",
+      "link": "https://amazon.jobs/en/jobs/10517564/forward-deployed-engineering-manager-aws-forward-deployed-engineering-us-government",
+      "snippet": "Recommended jobs ; Software Engineer I \u00b7 US, Washington, Seattle \u00b7 December 11, 2025 ; Software Development Engineer \u2013 2026 \u00b7 ES, Community of Madrid, Madrid.",
+      "date": "22 hours ago",
+      "position": 5
+    },
+    {
+      "title": "Sr. Software Development Engineer, AWS Forward ...",
+      "link": "https://www.amazon.jobs/en/jobs/10449376/sr-software-development-engineer-aws-forward-deployed-engineering",
+      "snippet": "Software Development Engineer , Amazon University Talent Aquisition (AUTA) \u00b7 IT, Piedmont, Asti \u00b7 July 16, 2026 ; Software Engineer I \u00b7 US, Washington, Seattle.",
+      "date": "22 hours ago",
+      "position": 6
+    },
+    {
+      "title": "Forward Deployed Engineer, AWS ...",
+      "link": "https://amazon.jobs/en/jobs/10517550/forward-deployed-engineer-aws-forward-deployed-engineering-us-government",
+      "snippet": "(Updated 9 days ago). Automation Engineer, CF. Location: IT, Marches, Jesi. Posted: August 27, 2026 (Updated 9 days ago). Software Engineer I. Location: US ...",
+      "date": "23 hours ago",
+      "position": 7
+    },
+    {
+      "title": "Software Development Manager, AWS IoT (Physical AI)",
+      "link": "https://www.amazon.jobs/en-gb/jobs/10543985/software-development-manager-aws-iot-physical-ai",
+      "snippet": "Software Engineer I. Location: US, Washington, Seattle. Posted: December 11, 2025 (Updated 19 days ago). Software Development Engineer \u2013 2026. Location: IE ...",
+      "date": "16 hours ago",
+      "position": 8
+    },
+    {
+      "title": "Sr. Data Engineer, Amazon Digital Advertising - \u804c\u4f4dID",
+      "link": "https://www.amazon.jobs/zh/jobs/10547075/sr-data-engineer-amazon-digital-advertising",
+      "snippet": "\u63a8\u8350\u7684\u5de5\u4f5c ; Software Engineer I \u00b7 US, Washington, Seattle ; Software Development Engineer \u2013 2026 \u00b7 ES, Community of Madrid, Madrid ; Data Center Technician.",
+      "date": "16 hours ago",
+      "position": 9
+    },
+    {
+      "title": "Design Technologist, AWS Marketing CX - \u804c\u4f4dID\uff1a10386673",
+      "link": "https://www.amazon.jobs/zh/jobs/10386673/design-technologist-aws-marketing-cx",
+      "snippet": "Software Engineer I. \u5de5\u4f5c\u5730\u70b9\uff1a US, Washington, Seattle. \u5df2\u53d1\u5e03\uff1a December 11, 2025 \uff0818 days \u4e4b\u524d\u66f4\u65b0\u8fc7\uff09. Visual Designer, Brand Innovation Lab. \u5de5\u4f5c\u5730\u70b9\uff1a GB ...",
+      "date": "21 hours ago",
+      "position": 10
+    }
+  ],
+  "credits": 1
+}

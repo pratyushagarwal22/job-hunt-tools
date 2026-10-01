@@ -1,0 +1,84 @@
+{
+  "searchParameters": {
+    "q": "site:job-boards.greenhouse.io (\"Software Engineer\" OR \"New Grad\")",
+    "gl": "us",
+    "type": "search",
+    "num": 10,
+    "page": 1,
+    "tbs": "qdr:d",
+    "engine": "google"
+  },
+  "organic": [
+    {
+      "title": "Principal Flight Software Engineer",
+      "link": "https://job-boards.greenhouse.io/trueanomalyinc/jobs/5253013007",
+      "snippet": "Principal Flight Software Engineer \u00b7 Master's degree in computer science, electrical engineering, computer engineering, or related field \u00b7 15+ years of FSW ...",
+      "date": "24 hours ago",
+      "position": 1
+    },
+    {
+      "title": "Staff Software Engineer, Compute and Network",
+      "link": "https://job-boards.greenhouse.io/attentive/jobs/4424815009",
+      "snippet": "Staff Software Engineer, Compute and Network \u00b7 The US base salary range for this full-time position is $200,000 - $230,000 annually + equity + benefits \u00b7 Our ...",
+      "date": "24 hours ago",
+      "position": 2
+    },
+    {
+      "title": "Software Engineer II, Backend (Streaming)",
+      "link": "https://job-boards.greenhouse.io/affirm/jobs/8003020003",
+      "snippet": "You have a total of 1.5+ years of experience as a software engineer. \u00b7 You have experience designing, developing and launching backend systems and are proficient ...",
+      "date": "20 hours ago",
+      "position": 3
+    },
+    {
+      "title": "Job Application for Software Engineer at Innovative Signal ...",
+      "link": "https://job-boards.greenhouse.io/isa/jobs/4417360009",
+      "snippet": "Software Engineer \u00b7 Degree: BS/BA \u00b7 Major(s): Computer Science, Computer Engineering, Electrical Engineering, Physics, Mathematics \u00b7 Experience: 3 or more years.",
+      "date": "15 hours ago",
+      "position": 4
+    },
+    {
+      "title": "Staff Software Engineer-Salesforce",
+      "link": "https://job-boards.greenhouse.io/okta/jobs/8053763",
+      "snippet": "Staff Software Engineer-Salesforce \u00b7 5+ years of hands-on Salesforce development experience using Apex, Process Automation tools, and Lightning Web Components.",
+      "date": "7 hours ago",
+      "position": 5
+    },
+    {
+      "title": "Software Engineer, Strategic Defense",
+      "link": "https://job-boards.greenhouse.io/andurilindustries/jobs/5247868007",
+      "snippet": "As a Software Engineer on the Strategic Defense team, you will solve a wide variety of problems involving networking, autonomy, systems integration, robotics, ...",
+      "date": "12 hours ago",
+      "position": 6
+    },
+    {
+      "title": "Flight Software Engineer III",
+      "link": "https://job-boards.greenhouse.io/trueanomalyinc/jobs/5252995007",
+      "snippet": "As a Flight Software Engineer III at True Anomaly, you will gain experience at every phase of the spacecraft program including design, analysis, manufacturing, ...",
+      "date": "22 hours ago",
+      "position": 7
+    },
+    {
+      "title": "Job Application for Software Engineer I at OneStream",
+      "link": "https://job-boards.greenhouse.io/onestream/jobs/4425162009",
+      "snippet": "The Software Engineer participates in code reviews and assists in diagnosing and resolving defects and production issues to ensure reliable, high-performing ...",
+      "date": "13 hours ago",
+      "position": 8
+    },
+    {
+      "title": "Senior Software Engineer, Backend (Online Storage)",
+      "link": "https://job-boards.greenhouse.io/affirm/jobs/8009366003",
+      "snippet": "You have a total of 5+ years of experience as a software engineer. \u00b7 You are experienced in designing, developing and launching backend systems at scale ...",
+      "date": "21 hours ago",
+      "position": 9
+    },
+    {
+      "title": "Security Software Engineer",
+      "link": "https://job-boards.greenhouse.io/gridmaticinc/jobs/4426412009",
+      "snippet": "We are hiring a Security Software Engineer for our security team to design and build scalable security services and controls for Gridmatic.",
+      "date": "23 hours ago",
+      "position": 10
+    }
+  ],
+  "credits": 1
+}

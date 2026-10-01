@@ -71,19 +71,19 @@ queries:
 
 company_sites:
   - name: Amazon
-    query: 'site:amazon.jobs ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad")'
+    query: 'site:amazon.jobs/en/jobs ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad")'
     enabled: true
 
   - name: Microsoft
-    query: 'site:careers.microsoft.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad")'
+    query: 'site:jobs.careers.microsoft.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad")'
     enabled: true
 
   - name: Google
-    query: 'site:google.com/about/careers ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad")'
+    query: 'site:google.com/about/careers/applications/jobs/results ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad")'
     enabled: true
 
   - name: Apple
-    query: 'site:jobs.apple.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad")'
+    query: 'site:jobs.apple.com/en-us/details ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad")'
     enabled: true
 
   - name: NVIDIA
@@ -112,8 +112,4 @@ company_sites:
 
   - name: Reddit
     query: 'site:redditinc.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad")'
-    enabled: true
-
-  - name: Pinterest
-    query: 'site:pinterestcareers.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad")'
     enabled: true

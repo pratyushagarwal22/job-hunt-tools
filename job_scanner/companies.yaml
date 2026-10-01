@@ -138,6 +138,10 @@ companies:
     ats: greenhouse
     slug: stubhubinc
 
+  - name: Pinterest
+    ats: greenhouse
+    slug: pinterest
+
   # --- Lever ---
 
   - name: Palantir
