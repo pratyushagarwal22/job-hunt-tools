@@ -5,63 +5,47 @@
 
 queries:
   - name: Greenhouse (job-boards)
-    query: 'site:job-boards.greenhouse.io ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad")'
+    query: 'site:job-boards.greenhouse.io ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad") -intitle:Staff -intitle:Principal -intitle:Director'
     enabled: true
 
   - name: Greenhouse (boards)
-    query: 'site:boards.greenhouse.io ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad")'
+    query: 'site:boards.greenhouse.io ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad") -intitle:Staff -intitle:Principal -intitle:Director'
     enabled: true
 
   - name: Ashby
-    query: 'site:jobs.ashbyhq.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad")'
+    query: 'site:jobs.ashbyhq.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad") -intitle:Staff -intitle:Principal -intitle:Director'
     enabled: true
 
   - name: Lever
-    query: 'site:jobs.lever.co ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad")'
+    query: 'site:jobs.lever.co ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad") -intitle:Staff -intitle:Principal -intitle:Director'
     enabled: true
 
   - name: Workable
-    query: 'site:apply.workable.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad")'
+    query: 'site:apply.workable.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad") -intitle:Staff -intitle:Principal -intitle:Director'
     enabled: true
 
   - name: Sequoia Capital
-    query: 'site:jobs.sequoiacap.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad")'
+    query: 'site:jobs.sequoiacap.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad") -intitle:Staff -intitle:Principal -intitle:Director'
     enabled: true
 
   - name: Insight Partners
-    query: 'site:jobs.insightpartners.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad")'
+    query: 'site:jobs.insightpartners.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad") -intitle:Staff -intitle:Principal -intitle:Director'
     enabled: true
 
   - name: a16z
-    query: 'site:jobs.a16z.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad")'
+    query: 'site:jobs.a16z.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad") -intitle:Staff -intitle:Principal -intitle:Director'
     enabled: true
 
   - name: Wellfound
-    query: 'site:wellfound.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad")'
+    query: 'site:wellfound.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad") -intitle:Staff -intitle:Principal -intitle:Director'
     enabled: true
 
   - name: Work at a Startup
-    query: 'site:workatastartup.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad")'
-    enabled: true
-
-  - name: RemoteOK
-    query: 'site:remoteok.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad")'
-    enabled: true
-
-  - name: We Work Remotely
-    query: 'site:weworkremotely.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad")'
-    enabled: true
-
-  - name: Remote Rocketship
-    query: 'site:remoterocketship.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad")'
-    enabled: true
-
-  - name: Working Nomads
-    query: 'site:workingnomads.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad")'
+    query: 'site:workatastartup.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad") -intitle:Staff -intitle:Principal -intitle:Director'
     enabled: true
 
   - name: Welcome to the Jungle
-    query: 'site:welcometothejungle.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad")'
+    query: 'site:welcometothejungle.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad") -intitle:Staff -intitle:Principal -intitle:Director'
     enabled: true
 
 # ---------------------------------------------------------------------------
@@ -71,37 +55,37 @@ queries:
 
 company_sites:
   - name: Amazon
-    query: 'site:amazon.jobs/en/jobs ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad")'
+    query: 'site:amazon.jobs/en/jobs ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad") -intitle:Staff -intitle:Principal -intitle:Director'
     enabled: true
 
   - name: Microsoft
-    query: 'site:jobs.careers.microsoft.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad")'
+    query: 'site:jobs.careers.microsoft.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad") -intitle:Staff -intitle:Principal -intitle:Director'
     enabled: true
 
   - name: Google
-    query: 'site:google.com/about/careers/applications/jobs/results ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad")'
+    query: 'site:google.com/about/careers/applications/jobs/results ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad") -intitle:Staff -intitle:Principal -intitle:Director'
     enabled: true
 
   - name: Apple
-    query: 'site:jobs.apple.com/en-us/details ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad")'
+    query: 'site:jobs.apple.com/en-us/details ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad") -intitle:Staff -intitle:Principal -intitle:Director'
     enabled: true
 
   - name: NVIDIA
-    query: 'site:nvidia.wd5.myworkdayjobs.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad")'
+    query: 'site:nvidia.wd5.myworkdayjobs.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad") -intitle:Staff -intitle:Principal -intitle:Director'
     enabled: true
 
   - name: Tesla
-    query: 'site:tesla.com/careers ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad")'
+    query: 'site:tesla.com/careers ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad") -intitle:Staff -intitle:Principal -intitle:Director'
     enabled: true
 
   - name: Meta
-    query: 'site:metacareers.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad")'
+    query: 'site:metacareers.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad") -intitle:Staff -intitle:Principal -intitle:Director'
     enabled: true
 
   - name: Netflix
-    query: 'site:explore.jobs.netflix.net ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad")'
+    query: 'site:explore.jobs.netflix.net ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad") -intitle:Staff -intitle:Principal -intitle:Director'
     enabled: true
 
   - name: Snap
-    query: 'site:careers.snap.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad")'
+    query: 'site:careers.snap.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad") -intitle:Staff -intitle:Principal -intitle:Director'
     enabled: true

@@ -14,14 +14,6 @@ companies:
     ats: greenhouse
     slug: mixpanel
 
-  - name: Amplitude
-    ats: greenhouse
-    slug: amplitude
-
-  - name: MaintainX
-    ats: greenhouse
-    slug: maintainx
-
   - name: UpKeep
     ats: greenhouse
     slug: upkeep
@@ -42,10 +34,6 @@ companies:
     ats: greenhouse
     slug: usenourish
 
-  - name: Grow Therapy
-    ats: greenhouse
-    slug: growtherapy
-
   - name: Luma Health
     ats: greenhouse
     slug: lumahealth
@@ -58,9 +46,10 @@ companies:
     ats: greenhouse
     slug: radar
 
-  - name: Instabase
-    ats: greenhouse
-    slug: instabase
+  # Greenhouse board 404 on 2026-10-01; no open jobs. Re-check later.
+  # - name: Instabase
+  #   ats: greenhouse
+  #   slug: instabase
 
   - name: Hungryroot
     ats: greenhouse
@@ -105,10 +94,6 @@ companies:
   - name: Sigma Computing
     ats: greenhouse
     slug: sigmacomputing
-
-  - name: Materialize
-    ats: greenhouse
-    slug: materialize
 
   - name: Pendo
     ats: greenhouse
@@ -261,3 +246,19 @@ companies:
   - name: Writer
     ats: ashby
     slug: writer
+
+  - name: Amplitude
+    ats: ashby
+    slug: amplitude
+
+  - name: MaintainX
+    ats: ashby
+    slug: maintainx
+
+  - name: Grow Therapy
+    ats: ashby
+    slug: grow-therapy
+
+  - name: Materialize
+    ats: ashby
+    slug: materialize

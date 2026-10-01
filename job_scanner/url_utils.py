@@ -2,8 +2,9 @@
 
 from urllib.parse import urlsplit, urlunsplit
 
-# gh_jid is deliberately absent: it is the job ID on company-hosted Greenhouse pages.
-_TRACKING_PARAMS = {"ref", "source", "gh_src"}
+# gh_jid and id are deliberately absent: they are job IDs on some career sites.
+_TRACKING_PARAMS = {"ref", "source", "gh_src", "team", "page", "location", "action"}
+_APPLY_SEGMENT = "/apply"
 
 
 def normalize_url(url: str) -> str:
@@ -13,11 +14,18 @@ def normalize_url(url: str) -> str:
         (
             parts.scheme.lower(),
             parts.netloc.lower(),
-            parts.path.rstrip("/"),
+            _strip_path(parts.path),
             "&".join(kept),
             "",
         )
     )
+
+
+def _strip_path(path: str) -> str:
+    path = path.rstrip("/")
+    while path.lower().endswith(_APPLY_SEGMENT):
+        path = path[: -len(_APPLY_SEGMENT)].rstrip("/")
+    return path
 
 
 def _is_tracking(pair: str) -> bool:

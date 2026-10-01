@@ -70,11 +70,66 @@ def test_keeps_param_values_verbatim():
     assert normalize_url(url) == url
 
 
+def test_strips_trailing_apply_lever():
+    url = "https://jobs.lever.co/cx2/003bd199-3191-4b97-8ee6-4ace916cb446/apply"
+    assert normalize_url(url) == "https://jobs.lever.co/cx2/003bd199-3191-4b97-8ee6-4ace916cb446"
+
+
+def test_strips_trailing_apply_workable_with_slash():
+    url = "https://apply.workable.com/tiger-analytics/j/13C9E82229/apply/"
+    assert normalize_url(url) == "https://apply.workable.com/tiger-analytics/j/13C9E82229"
+
+
+def test_strips_trailing_apply_nvidia_keeps_path_case():
+    url = (
+        "https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite/job/"
+        "Tegra-System-Software-Engineer_JR2026588/apply"
+    )
+    assert normalize_url(url) == (
+        "https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite/job/"
+        "Tegra-System-Software-Engineer_JR2026588"
+    )
+
+
+def test_apply_variant_matches_plain_url():
+    plain = "https://jobs.lever.co/acme/1234"
+    assert normalize_url(plain + "/apply") == normalize_url(plain)
+
+
+def test_apply_only_stripped_as_last_segment():
+    url = "https://example.com/apply/jobs/1"
+    assert normalize_url(url) == url
+    assert normalize_url("https://example.com/jobs/reapply") == "https://example.com/jobs/reapply"
+
+
+def test_strips_team_page_location_action():
+    url = "https://example.com/jobs/1?team=SFTWR&page=32&location=India&action=apply"
+    assert normalize_url(url) == "https://example.com/jobs/1"
+
+
+def test_strips_new_params_keeps_others():
+    url = "https://www.google.com/about/careers/applications/jobs/results/9449-design?A&page=32"
+    assert normalize_url(url) == "https://www.google.com/about/careers/applications/jobs/results/9449-design?A"
+
+
+def test_keeps_snap_id_param():
+    url = "https://careers.snap.com/job?id=R0047005"
+    assert normalize_url(url) == url
+
+
+def test_keeps_id_and_gh_jid_with_new_params():
+    url = "https://company.com/careers/apply?gh_jid=123&team=x&id=9&location=US"
+    assert normalize_url(url) == "https://company.com/careers?gh_jid=123&id=9"
+
+
 def test_idempotent():
     urls = [
         "https://Example.com/Jobs/1/?utm_source=x&gh_jid=9&ref=y#frag",
         "https://example.com/",
         "https://example.com/a?b=1",
+        "https://jobs.lever.co/acme/1234/apply/",
+        "https://example.com/jobs/1/apply/apply",
+        "https://example.com/jobs/1?team=x&id=5&page=2",
     ]
     for url in urls:
         once = normalize_url(url)

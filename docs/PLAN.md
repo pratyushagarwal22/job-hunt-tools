@@ -429,7 +429,7 @@ found 42, new 12, scored 2, failed 0, skipped (cap): 10
 # Idempotency — run again immediately
 python -m job_scanner.main --max-jobs 2
 ```
-**Expected**: `new 0` (or close to 0) — previously scored jobs are deduped by URL.
+**Expected**: run 2 shows `new` reduced by the number scored in run 1, and no URL is written twice.
 
 ---
 

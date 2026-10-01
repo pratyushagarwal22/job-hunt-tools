@@ -5,6 +5,11 @@ max_jobs_per_run: 50
 
 max_pages_per_query: 2
 
+search:
+  tbs: "qdr:d"  # past 24 hours
+  gl: us        # search origin, not a job-location filter
+  num: 10       # results per page
+
 ats_lookback_days: 3
 
 request_timeout_seconds: 15
