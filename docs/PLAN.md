@@ -17,7 +17,7 @@ Tasks are in strict dependency order.
 
 **Out of scope**: No job_scanner or email_finder code. No business logic. sheets.py provides only three primitives: `read_rows(sheet_id, tab, range)`, `append_rows(sheet_id, tab, rows)`, and `get_sheet_title(sheet_id)`. No data models.
 
-**Key detail**: `append_rows` must use `valueInputOption=USER_ENTERED` so that `FALSE` becomes a real boolean (required for checkbox columns to render correctly).
+**Key detail**: `append_rows` must use `valueInputOption=RAW`. Callers write `""` (blank) to the `applied` / `contacted` checkbox columns, not `False` (see the checkbox decision in DESIGN.md). `RAW` avoids two problems: `USER_ENTERED` would parse text starting with `=` or `+` as a formula, and would coerce date strings into date values.
 
 **Verification**:
 ```bash
@@ -42,14 +42,14 @@ import os, dotenv
 dotenv.load_dotenv()
 sheet_id = os.environ['SHEET_ID']
 # Append one test row
-append_rows(sheet_id, 'Jobs', [[False, 7.5, 'full', 'Test Title', 'Test Co', 'Remote', '', '', 'test reason', 'https://example.com/test', '', '2026-09-29 21:00', 'test']])
+append_rows(sheet_id, 'Jobs', [['', 7.5, 'full', 'Test Title', 'Test Co', 'Remote', '', '', 'test reason', 'https://example.com/test', '', '2026-09-29 21:00', 'test']])
 # Read back the last row to check where it landed
 rows = read_rows(sheet_id, 'Jobs', 'A1:M1000')
 print(f'Total rows (including header): {len(rows)}')
 print(f'Last row: {rows[-1]}')
 "
 ```
-**Expected**: The test row lands on row 2 (right after the header), not row 1001. The `applied` cell is a real boolean `FALSE` (or unchecked checkbox), not the text string "FALSE". Then delete the test row by hand. If either check fails, stop and report — do not attempt a fix.
+**Expected**: The test row lands on row 2 (right after the header), not row 1001. The `applied` cell is blank (`''`). This requires that no checkboxes are pre-filled on empty rows. `read_rows` uses `valueRenderOption=UNFORMATTED_VALUE`, so read-back values are raw, not display strings. Then delete the test row by hand. If either check fails, stop and report — do not attempt a fix.
 
 **`.env.example` contents**:
 ```
@@ -415,7 +415,8 @@ python -m job_scanner.main --max-jobs 2
 found 42, new 12, scored 2, failed 0, skipped (cap): 10
 ```
 - The TEST sheet has 2 new rows appended (or fewer if < 2 new jobs found).
-- Each row has all 13 columns populated (applied=FALSE, match_score is a number, url is normalized, etc.).
+- Each row has all 13 columns in place (applied is blank, match_score is a number, url is normalized, etc.).
+- New rows land directly after the last data row, not after row 1000.
 - No crashes. Failed jobs (if any) are logged but don't stop the run.
 - Run completes in under 5 minutes (2 jobs = 2 Haiku calls + JD fetches).
 
@@ -533,7 +534,7 @@ pytest tests/test_apollo_client.py tests/test_outreach_client.py tests/test_link
 python -m email_finder.main "https://www.linkedin.com/in/some-test-person/" --draft
 # Expected: prints "Writing to sheet: Job Tracker TEST" first,
 #           then result (name, email or "not found", outreach line if --draft).
-# TEST sheet Contacts tab has one new row.
+# TEST sheet Contacts tab has one new row, directly after the last data row, with `contacted` blank.
 
 # 3. Idempotency — run same URL again (with different casing/trailing slash)
 python -m email_finder.main "https://www.LinkedIn.com/in/Some-Test-Person"

@@ -106,7 +106,7 @@ job-hunt-tools/
 
 | Column | Type | Notes |
 |---|---|---|
-| applied | Checkbox | Code appends FALSE. Checkbox setup to be confirmed in Task 1 (see Open Risks). Never overwritten by code. |
+| applied | Checkbox | Code appends "" (blank). Marked by hand; never pre-fill checkboxes on empty rows (see Open Risks). Never overwritten by code. |
 | match_score | Number | 1.0–10.0 from Haiku (one decimal, e.g. 7.5) |
 | jd_source | String | "full" (fetched JD or ATS API) or "snippet" (scored from search title + snippet) |
 | title | String | From ATS source data when available; from Haiku for search results |
@@ -124,7 +124,7 @@ job-hunt-tools/
 
 | Column | Type | Notes |
 |---|---|---|
-| contacted | Checkbox | Code appends FALSE. Checkbox setup to be confirmed in Task 1 (see Open Risks). Never overwritten by code. |
+| contacted | Checkbox | Code appends "" (blank). Marked by hand; never pre-fill checkboxes on empty rows (see Open Risks). Never overwritten by code. |
 | name | String | From Apollo |
 | company | String | From Apollo |
 | title | String | From Apollo |
@@ -186,7 +186,7 @@ Scorer receives two inputs: `config/candidate.md` (one-page evidence doc) and `c
 | `config/` at repo root, gitignored | Personal files (profile.yaml, candidate.md) stay out of repo; .example versions document format |
 | `settings.yaml` committed | Caps, filter keywords, and lookback days are config, not secrets |
 | Append-only sheet writes | User's checkboxes and manual edits must survive every run |
-| Code appends FALSE for checkbox columns | Checkbox formatting set once by hand on the column; code only writes the boolean |
+| Code appends "" (blank) for checkbox columns | Pre-filled checkboxes on empty rows count as data, so the append API writes after them (row 1001 in Task 1 testing). Checkboxes are never pre-filled; marking applied/contacted is manual |
 | No `remote` column | User is open to all work modes; included in location text |
 | Write "not found" email rows | Prevents re-spending Apollo credits on same person |
 | Score cap applied after dedup + title filter + location filter | Cap counts real US-based SWE candidates, not noise |
@@ -212,4 +212,4 @@ Scorer receives two inputs: `config/candidate.md` (one-page evidence doc) and `c
 - **Sheet row limits**: Google Sheets caps at ~10M cells. Not a near-term risk, but if you never clean up, the sheet grows forever.
 - **Snippet-based scores are less reliable**: when the full JD can't be fetched, scoring from title + snippet may miss requirements or benefits. The `jd_source` column lets you see which scores are snippet-based.
 - **Haiku output consistency**: structured JSON mode + pydantic validation catches malformed responses. Invalid responses are skipped and retried next run.
-- **Checkbox column append behavior**: if the whole `applied` / `contacted` column is pre-filled with checkboxes (e.g. via Google Sheets data validation on 1000 rows), those cells may be treated as containing FALSE. The append API would then add new rows after the last "filled" row (e.g. row 1001) instead of after the last data row (e.g. row 2). To be investigated and confirmed in Task 1.
+- **Checkbox column append behavior**: if the whole `applied` / `contacted` column is pre-filled with checkboxes (e.g. via Google Sheets data validation on 1000 rows), those cells may be treated as containing FALSE. The append API would then add new rows after the last "filled" row (e.g. row 1001) instead of after the last data row (e.g. row 2). **Resolved in Task 1**: confirmed — with checkboxes pre-filled on rows 2–1000, the append landed on row 1001. Decision: code writes "" (blank) to `applied` / `contacted`, checkboxes are never pre-filled on empty rows, and marking is manual.
