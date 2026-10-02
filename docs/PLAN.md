@@ -404,7 +404,7 @@ pytest tests/test_scoring_client.py -v
   4. Merge (**ATS first, so ATS wins dedup**), normalize URLs, dedup (against sheet + within run). Keep the raw URL alongside for the location filter.
   5. Title filter, location filter (location filter gets the raw URL)
   6. Convert all dates using `date_utils`: Serper relative dates → `YYYY-MM-DD`, ATS dates → `YYYY-MM-DD`. Sort by full datetime (newest first); jobs without a posted_date go after all dated jobs, in their original order. Apply cap (`max_jobs` or `max_jobs_per_run`).
-  7. For each job: ATS jobs already have JD text; search-sourced jobs → fetch JD via jd_client (with snippet fallback). Score via scoring_client.
+  7. For each job: ATS jobs already have JD text; search-sourced jobs with a `jobs.ashbyhq.com/<slug>/<job id>` URL → JD from the Ashby public posting API (`ats_client.get_ashby_board`, board cached per slug for the run, job matched by id; counted as "full fetched"); any Ashby failure (AtsError, job not on board, empty text) and all other search-sourced jobs → fetch JD via jd_client (with snippet fallback). Score via scoring_client.
   8. Use ATS title/company/location for ATS jobs (Haiku location if the ATS one is blank), Haiku title/company/location for search jobs. `source_query` = the query string, or `<ats>:<company>` for ATS jobs.
   9. Format `date_found` as `YYYY-MM-DD HH:MM` (local time per `timezone` setting). **One append at the end** with all scored rows.
   10. Return summary dict: `{found, new, filtered, scored, failed, skipped_cap}`

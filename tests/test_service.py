@@ -73,9 +73,11 @@ def _score_result(**overrides) -> ScoreResult:
 class Harness:
     def __init__(self, monkeypatch, *, settings=None, queries=None, company_sites=None,
                  companies=None, search_pages=None, ats_jobs=None, existing=(), jd=None,
-                 score=None):
+                 score=None, ashby_boards=None):
         self.search_pages = search_pages or {}
         self.ats_jobs = ats_jobs or {}
+        self.ashby_boards = ashby_boards or {}
+        self.ashby_calls = []
         self.existing = set(existing)
         self.jd = jd or {}
         self.score_impl = score
@@ -102,6 +104,7 @@ class Harness:
         monkeypatch.setattr(service.search_client, "search", self._search)
         for ats in ("greenhouse", "lever", "ashby"):
             monkeypatch.setattr(service.ats_client, f"list_{ats}_jobs", self._ats(ats))
+        monkeypatch.setattr(service.ats_client, "get_ashby_board", self._ashby_board)
         monkeypatch.setattr(service.jd_client, "fetch_jd", self._fetch_jd)
         monkeypatch.setattr(service.scoring_client, "score_job", self._score)
         monkeypatch.setattr(service.sheets_repo, "get_existing_urls", self._existing)
@@ -122,6 +125,13 @@ class Harness:
                 raise jobs
             return [dict(job, source=ats) for job in jobs]
         return list_jobs
+
+    def _ashby_board(self, slug, timeout=15):
+        self.ashby_calls.append((slug, timeout))
+        board = self.ashby_boards.get(slug, AtsError("ashby", slug, "HTTP 404"))
+        if isinstance(board, Exception):
+            raise board
+        return board
 
     def _fetch_jd(self, url, timeout, min_chars):
         self.jd_calls.append((url, timeout, min_chars))
@@ -383,6 +393,83 @@ def test_search_snippet_fallback(monkeypatch):
     assert "Software Engineer at JSCo" in call["jd_text"]
     assert "We build apps." in call["jd_text"]
     assert h.rows[0][2] == "snippet"
+
+
+ASHBY_ID_1 = "7133d205-5421-4336-a8e2-6037b5f55073"
+ASHBY_ID_2 = "3136a5a5-06fd-4c82-8b72-a43467e6b128"
+ASHBY_URL_1 = f"https://jobs.ashbyhq.com/cohere/{ASHBY_ID_1}"
+ASHBY_URL_2 = f"https://jobs.ashbyhq.com/cohere/{ASHBY_ID_2}"
+
+
+def _ashby_posting(job_id, jd_text):
+    return dict(id=job_id, title="Software Engineer",
+                url=f"https://jobs.ashbyhq.com/cohere/{job_id}", jd_text=jd_text)
+
+
+def test_ashby_search_url_gets_jd_from_api_board_cached(monkeypatch, caplog):
+    h = Harness(
+        monkeypatch,
+        search_pages={QUERY_A: [[_search_result(ASHBY_URL_1),
+                                 _search_result(ASHBY_URL_2 + "/application?utm_source=x")]]},
+        ashby_boards={"cohere": [_ashby_posting(ASHBY_ID_1, "Ashby JD one"),
+                                 _ashby_posting(ASHBY_ID_2, "Ashby JD two")]},
+    )
+
+    with caplog.at_level("INFO", logger="job_scanner"):
+        service.run_pipeline(None)
+
+    assert h.ashby_calls == [("cohere", 7)]
+    assert h.jd_calls == []
+    assert [c["jd_text"] for c in h.score_calls] == ["Ashby JD one", "Ashby JD two"]
+    assert all(c["jd_source"] == "full" for c in h.score_calls)
+    assert [row[2] for row in h.rows] == ["full", "full"]
+    assert _messages(caplog, "JD") == ["JD full fetched 2 | snippet fallback 0 | ATS full 0"]
+
+
+def test_ashby_job_missing_from_board_falls_back_to_jd_client(monkeypatch):
+    h = Harness(
+        monkeypatch,
+        search_pages={QUERY_A: [[_search_result(ASHBY_URL_1), _search_result(ASHBY_URL_2)]]},
+        ashby_boards={"cohere": [_ashby_posting(ASHBY_ID_1, "")]},
+        jd={ASHBY_URL_2: (None, "snippet")},
+    )
+
+    service.run_pipeline(None)
+
+    assert h.ashby_calls == [("cohere", 7)]
+    assert [url for url, _, _ in h.jd_calls] == [ASHBY_URL_1, ASHBY_URL_2]
+    first, second = h.score_calls
+    assert first["jd_text"] == "Fetched full JD for " + ASHBY_URL_1
+    assert second["jd_source"] == "snippet"
+
+
+def test_ashby_board_error_falls_back_and_is_not_refetched(monkeypatch):
+    h = Harness(
+        monkeypatch,
+        search_pages={QUERY_A: [[_search_result(ASHBY_URL_1), _search_result(ASHBY_URL_2)]]},
+        ashby_boards={"cohere": AtsError("ashby", "cohere", "HTTP 500")},
+    )
+
+    summary = service.run_pipeline(None)
+
+    assert h.ashby_calls == [("cohere", 7)]
+    assert [url for url, _, _ in h.jd_calls] == [ASHBY_URL_1, ASHBY_URL_2]
+    assert summary["scored"] == 2
+
+
+def test_non_ashby_search_url_skips_ashby_api(monkeypatch):
+    h = Harness(
+        monkeypatch,
+        search_pages={QUERY_A: [[_search_result("https://jobs.lever.co/acme/abc"),
+                                 _search_result("https://jobs.ashbyhq.com/cohere")]]},
+    )
+
+    service.run_pipeline(None)
+
+    assert h.ashby_calls == []
+    assert [url for url, _, _ in h.jd_calls] == [
+        "https://jobs.lever.co/acme/abc", "https://jobs.ashbyhq.com/cohere",
+    ]
 
 
 def test_ats_empty_jd_scored_from_title_and_location(monkeypatch):

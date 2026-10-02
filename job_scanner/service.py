@@ -36,6 +36,8 @@ _ATS_LISTERS = {
     "ashby": "list_ashby_jobs",
 }
 
+_ASHBY_JOB_URL = re.compile(r"^https?://jobs\.ashbyhq\.com/([^/?#]+)/([0-9a-f-]{36})", re.I)
+
 _FAIL_MESSAGE_CHARS = 150
 
 _SCORE_BUCKETS = [("8-10", 8.0), ("6-7.9", 6.0), ("3-5.9", 3.0), ("1-2.9", float("-inf"))]
@@ -108,9 +110,10 @@ def run_pipeline(max_jobs: int | None) -> dict:
     jd_counts = dict(full_fetched=0, snippet=0, ats_full=0)
     experience_dropped = 0
     failed = 0
+    ashby_boards = {}
     for job in to_score:
         try:
-            jd_text, jd_source = _get_jd(job, settings)
+            jd_text, jd_source = _get_jd(job, settings, ashby_boards)
             jd_counts[_jd_kind(job, jd_source)] += 1
             years, phrase = experience_filter.required_years(jd_text)
             if years is not None and years > max_years:
@@ -337,18 +340,48 @@ def _newest_first(jobs: list[dict]) -> list[dict]:
     return sorted(dated, key=lambda job: job["posted"], reverse=True) + undated
 
 
-def _get_jd(job: dict, settings: dict) -> tuple[str, str]:
-    """Full JD when available, else title + snippet (search) or title + location (ATS)."""
+def _get_jd(job: dict, settings: dict, ashby_boards: dict) -> tuple[str, str]:
+    """Full JD when available, else title + snippet (search) or title + location (ATS).
+
+    `ashby_boards` caches Ashby boards by slug for the run (None = board could not be fetched).
+    """
     if job["is_ats"]:
         if job["jd_text"]:
             return job["jd_text"], "full"
         return f"{job['title']}\n{job['location']}", "snippet"
+    ashby_text = _ashby_jd(job["url"], settings, ashby_boards)
+    if ashby_text:
+        return ashby_text, "full"
     jd_text, jd_source = jd_client.fetch_jd(
         job["url"], settings["request_timeout_seconds"], settings["jd_min_chars"]
     )
     if jd_source != "full" or not jd_text:
         return f"{job['title']}\n{job['snippet']}", "snippet"
     return jd_text, jd_source
+
+
+def _ashby_jd(url: str, settings: dict, ashby_boards: dict) -> str | None:
+    """JD text from the Ashby posting API for a jobs.ashbyhq.com/<slug>/<id> URL, else None."""
+    match = _ASHBY_JOB_URL.match(url)
+    if match is None:
+        return None
+    slug, job_id = match.group(1), match.group(2).lower()
+    if slug not in ashby_boards:
+        try:
+            ashby_boards[slug] = ats_client.get_ashby_board(
+                slug, timeout=settings["request_timeout_seconds"]
+            )
+        except ats_client.AtsError as exc:
+            logger.info("ASHBY board %s unavailable (%s); falling back", slug, exc.detail)
+            ashby_boards[slug] = None
+    board = ashby_boards[slug]
+    if board is None:
+        return None
+    posting = next((p for p in board if p["id"].lower() == job_id), None)
+    if posting is None:
+        logger.info("ASHBY job %s not on board %s; falling back", job_id, slug)
+        return None
+    return posting["jd_text"] or None
 
 
 def _jd_kind(job: dict, jd_source: str) -> str:

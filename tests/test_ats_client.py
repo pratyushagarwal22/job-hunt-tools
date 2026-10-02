@@ -10,6 +10,7 @@ import requests
 from job_scanner import ats_client
 from job_scanner.ats_client import (
     AtsError,
+    get_ashby_board,
     list_ashby_jobs,
     list_greenhouse_jobs,
     list_lever_jobs,
@@ -246,6 +247,36 @@ def test_invalid_json_raises_ats_error():
         with pytest.raises(AtsError) as info:
             list_ashby_jobs("acme", "Acme Inc", lookback_days=7)
     assert info.value.detail == "invalid JSON"
+
+
+# --- single Ashby board (JD lookup) ---
+
+
+def test_get_ashby_board_returns_all_jobs_ignoring_age():
+    raw = _load("ashby_list.json")
+    for job, days_ago in zip(raw["jobs"], [1, 365, 3000]):
+        job["publishedAt"] = _iso(days_ago)
+    del raw["jobs"][1]["descriptionPlain"]
+    with patch.object(ats_client.requests, "get", return_value=_response(raw)) as get:
+        board = get_ashby_board("cohere", timeout=7)
+
+    assert get.call_args.args[0] == "https://api.ashbyhq.com/posting-api/job-board/cohere"
+    assert get.call_args.kwargs["timeout"] == 7
+    assert [b["id"] for b in board] == [j["id"] for j in raw["jobs"]]
+    assert [b["url"] for b in board] == [j["jobUrl"] for j in raw["jobs"]]
+    assert board[0]["jd_text"] == raw["jobs"][0]["descriptionPlain"].strip()
+    assert board[1]["jd_text"] and "<" not in board[1]["jd_text"]
+
+
+def test_get_ashby_board_errors_raise_ats_error():
+    with patch.object(ats_client.requests, "get", return_value=_response({}, 404)):
+        with pytest.raises(AtsError) as info:
+            get_ashby_board("acme")
+    assert info.value.detail == "HTTP 404"
+    with patch.object(ats_client.requests, "get", side_effect=requests.Timeout("slow")):
+        with pytest.raises(AtsError) as info:
+            get_ashby_board("acme")
+    assert info.value.detail == "Timeout"
 
 
 def test_empty_board_returns_empty_list():

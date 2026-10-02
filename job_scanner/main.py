@@ -17,6 +17,8 @@ REQUIRED_ENV_VARS = ("SHEET_ID", "SERPER_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_
 def main(argv: list[str] | None = None) -> int:
     load_dotenv()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    for name in ("httpx", "httpx2", "anthropic"):
+        logging.getLogger(name).setLevel(logging.WARNING)
 
     parser = argparse.ArgumentParser(description="Scan for new jobs and append them to the sheet.")
     parser.add_argument(

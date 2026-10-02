@@ -1,4 +1,4 @@
-"""Greenhouse, Lever and Ashby public job board API clients. One GET per company.
+"""Greenhouse, Lever and Ashby public job board API clients. One GET per board.
 
 A failed request, non-2xx status or non-JSON body raises AtsError; the caller decides
 whether to skip the company.
@@ -73,12 +73,31 @@ def list_ashby_jobs(
                 location=item.get("location"),
                 url=item.get("jobUrl"),
                 posted_date=item.get("publishedAt"),
-                jd_text=(item.get("descriptionPlain") or "").strip()
-                or _html_to_text(item.get("descriptionHtml") or ""),
+                jd_text=_ashby_jd_text(item),
                 source="ashby",
             )
         )
     return _within_lookback(jobs, lookback_days)
+
+
+def get_ashby_board(slug: str, timeout: float = 15) -> list[dict]:
+    """Every posting on one Ashby board (no lookback filter), as dicts of id, title, url, jd_text."""
+    body = _get_json(_ASHBY_URL.format(slug=slug), "ashby", slug, timeout)
+    return [
+        dict(
+            id=item.get("id") or "",
+            title=item.get("title"),
+            url=item.get("jobUrl"),
+            jd_text=_ashby_jd_text(item),
+        )
+        for item in body.get("jobs", [])
+    ]
+
+
+def _ashby_jd_text(item: dict) -> str:
+    return (item.get("descriptionPlain") or "").strip() or _html_to_text(
+        item.get("descriptionHtml") or ""
+    )
 
 
 class AtsError(Exception):
