@@ -26,7 +26,8 @@ scoring:
   max_tokens: 2048
   max_jd_chars: 15000
 
-# USD per million tokens, keyed by model ID. Stored only; COST logging comes in Task 8.
+# USD per million tokens, keyed by model ID. Used for the COST log line; a model with no
+# entry logs "cost unknown".
 prices:
   claude-haiku-4-5-20251001:
     input: 1.00
@@ -115,7 +116,7 @@ title_filter:
 
 location_filter:
   # Drop a job only if an exclude keyword matches AND no us_signals entry appears in any
-  # checked field (ATS: location; search: title + snippet + raw URL).
+  # checked field (ATS: location; search: title + raw URL, never the snippet).
   # Matching is case-insensitive and whole-word.
   # Jobs with US locations, "Remote", "Remote - US", or blank/unknown pass through.
   # No bare "US" or two-letter state codes in us_signals ("us" matches "join us");

@@ -15,6 +15,10 @@ _legacy/
 # One-off experiments
 _scratch/
 
+# Local log captures
+run.log
+review.txt
+
 # Python
 __pycache__/
 *.pyc
