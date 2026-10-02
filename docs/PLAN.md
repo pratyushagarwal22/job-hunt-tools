@@ -17,7 +17,7 @@ Tasks are in strict dependency order.
 
 **Out of scope**: No job_scanner or email_finder code. No business logic. sheets.py provides only three primitives: `read_rows(sheet_id, tab, range)`, `append_rows(sheet_id, tab, rows)`, and `get_sheet_title(sheet_id)`. No data models.
 
-**Key detail**: `append_rows` must use `valueInputOption=RAW`. Callers write `""` (blank) to the `applied` / `contacted` checkbox columns, not `False` (see the checkbox decision in DESIGN.md). `RAW` avoids two problems: `USER_ENTERED` would parse text starting with `=` or `+` as a formula, and would coerce date strings into date values.
+**Key detail**: `append_rows` must use `valueInputOption=RAW`. Callers write `""` (blank) to the `applied` / `contacted` checkbox columns, not `False` (see the checkbox decision in docs/DESIGN.md). `RAW` avoids two problems: `USER_ENTERED` would parse text starting with `=` or `+` as a formula, and would coerce date strings into date values.
 
 **Verification**:
 ```bash
@@ -34,7 +34,7 @@ print(rows)
 ```
 **Expected output**: A list containing one list — the 13 header column names from the Jobs tab (`['applied', 'match_score', 'jd_source', ...]`). If the sheet is unreachable, a clear error with the HTTP status.
 
-**Checkbox append check** (see Open Risks in DESIGN.md):
+**Checkbox append check** (see Open Risks in docs/DESIGN.md):
 ```bash
 python -c "
 from shared.sheets import append_rows, read_rows
@@ -76,7 +76,7 @@ APOLLO_API_KEY=
 
 ## Task 2: search_client.py (Serper)
 
-**Goal**: Build the Serper API client. Confirm that `site:` + `OR` + brackets syntax works through Serper (resolves the open risk from DESIGN.md). Save scrubbed fixtures for tests.
+**Goal**: Build the Serper API client. Confirm that `site:` + `OR` + brackets syntax works through Serper (resolves the open risk from docs/DESIGN.md — **resolved**: Serper passes the syntax through). Save scrubbed fixtures for tests.
 
 **Files touched**:
 - `job_scanner/__init__.py` (new, empty)
@@ -86,10 +86,11 @@ APOLLO_API_KEY=
 - `tests/fixtures/serper_site_query.json` (new, scrubbed)
 - `tests/fixtures/serper_company_sites_query.json` (new, scrubbed)
 
-**Out of scope**: No URL normalization, no dedup, no title filtering. The client returns raw parsed results (list of dicts with `title`, `link`, `snippet`, `date`, `position`). No pagination logic yet (pagination loop lives in service.py, Task 7) — just a single-page call helper that accepts `tbs`, `gl`, `num`, and `page` params.
+**Out of scope**: No URL normalization, no dedup, no title filtering. The client returns raw parsed results (list of dicts with `title`, `link`, `snippet`, `date`, `position`). No pagination logic yet (pagination loop lives in service.py, Task 7) — just a single-page call helper that accepts `tbs`, `gl`, `num`, `page` and `timeout` params (values come from `settings.yaml` `search` block and `request_timeout_seconds`, passed in by service.py).
 
 **What search_client.py exposes**:
-- `search(query: str, tbs: str, gl: str, num: int, page: int) -> list[dict]`
+- `search(query: str, tbs: str, gl: str, num: int, page: int, timeout: float = 15) -> list[dict]`
+- Missing `SERPER_API_KEY` or non-2xx → `RuntimeError` (non-2xx message includes the HTTP status).
 - Each result dict includes `date` (Serper's relative date string, e.g. "21 hours ago", or absolute like "Sep 28, 2026") when available. The raw string is kept as-is here; conversion to `YYYY-MM-DD` happens in `date_utils.py` (Task 4).
 - Reads `SERPER_API_KEY` from env.
 
@@ -252,13 +253,14 @@ pytest tests/test_ats_client.py -v
 **What each module exposes**:
 
 `url_utils.py`:
-- `normalize_url(url: str) -> str` — strip `utm_*`, `ref`, `source`, `gh_src`, trailing slashes, fragments. Lowercase the domain. Keep path case. Do NOT strip `gh_jid` — it is the job ID on company-hosted Greenhouse pages; stripping it would collapse different jobs into one URL and break dedup.
+- `normalize_url(url: str) -> str` — strip `utm_*`, `ref`, `source`, `gh_src`, `team`, `page`, `location`, `action`, fragments, trailing slashes, and a trailing `/apply` path segment. Lowercase scheme + domain. Keep path case. Do NOT strip `gh_jid` or `id` — they are job IDs on some career sites (e.g. company-hosted Greenhouse pages); stripping them would collapse different jobs into one URL and break dedup.
 
 `title_filter.py`:
 - `passes_title_filter(title: str, include: list[str], exclude: list[str]) -> bool` — case-insensitive, whole-word matching. Must match at least one include keyword and zero exclude keywords.
 
 `location_filter.py`:
-- `passes_location_filter(location: str | None, title: str, snippet: str, url: str, exclude_keywords: list[str], is_ats: bool) -> bool` — for ATS jobs, check `location` field only. For search jobs, check `title + snippet + url` (catches locations in URLs, e.g. NVIDIA's `Taiwan-Taipei` path or Google's `?location=India`). Blank/unknown/Remote passes.
+- `passes_location_filter(location: str | None, title: str, snippet: str, url: str, exclude_keywords: list[str], is_ats: bool) -> bool` — for ATS jobs, check `location` field only. For search jobs, check `title + snippet + url` (URL-decoded; catches locations in URLs, e.g. NVIDIA's `Taiwan-Taipei` path or Google's `?location=India`). The caller passes the **raw** URL, not the normalized one (normalization strips `?location=`). Blank/unknown/Remote passes.
+- Both filters use the same whole-word matcher: `(?<!\w)…(?!\w)` lookarounds instead of `\b`, so keywords like `C++` or `AI/ML` match correctly.
 
 `date_utils.py`:
 - `parse_relative_date(date_str: str, run_start: datetime) -> datetime | None` — converts Serper's `date` field to a timezone-aware `datetime`. `run_start` must be tz-aware. Handles: relative strings ("21 hours ago", "3 days ago", "1 week ago", "just now") and absolute strings ("Sep 28, 2026" → midnight in the configured timezone). Returns `None` for unparseable input.
@@ -272,7 +274,7 @@ pytest tests/test_ats_client.py -v
 pytest tests/test_url_utils.py tests/test_title_filter.py tests/test_location_filter.py tests/test_date_utils.py -v
 ```
 **Expected**: All tests pass. Test cases cover:
-- `url_utils`: utm stripping, ref removal, source removal, gh_src removal, trailing slash, fragment removal, mixed case domain, idempotency. **Critical test**: two URLs differing only by `gh_jid` must stay different after normalization (e.g. `https://company.com/jobs?gh_jid=123` vs `https://company.com/jobs?gh_jid=456` → two distinct normalized URLs).
+- `url_utils`: utm stripping, ref / source / gh_src / team / page / location / action removal, trailing slash, trailing `/apply`, fragment removal, mixed case domain, idempotency. **Critical test**: two URLs differing only by `gh_jid` (or `id`) must stay different after normalization (e.g. `https://company.com/jobs?gh_jid=123` vs `https://company.com/jobs?gh_jid=456` → two distinct normalized URLs).
 - `title_filter`: exact match, partial non-match (e.g., "Lead" does not match "Leadership"), case insensitivity, exclude overrides include, no include match → fail.
 - `location_filter`: "London" → fail, "Remote" → pass, "New York, NY" → pass, blank → pass, "Bangalore, India" → fail, ATS mode checks only location field, search mode checks title+snippet+url (e.g. URL containing `Taiwan-Taipei` or `?location=India` → fail).
 - `date_utils`: all parsers return tz-aware datetimes (not bare dates) so Task 7 can sort on full datetime. "21 hours ago" at a 9:00 AM CT run → tz-aware datetime of the previous day at noon CT. "3 days ago" → 3 days before run_start. "1 week ago" → 7 days before. "just now" → run_start. Absolute date "Sep 28, 2026" → midnight CT on that date. Unparseable string → `None`. `parse_ats_date` with a UTC ISO string → CT datetime. `parse_ats_date` with a Unix ms int (Lever) → CT datetime. `format_posted_date` → `YYYY-MM-DD`.
@@ -292,23 +294,23 @@ pytest tests/test_url_utils.py tests/test_title_filter.py tests/test_location_fi
 **Out of scope**: No scoring, no sheet writes. Does not handle ATS JDs (those come from ats_client.py). No retry logic — one request with `request_timeout_seconds` from settings.yaml.
 
 **What jd_client.py exposes**:
-- `fetch_jd(url: str, timeout: int) -> tuple[str | None, str]` — returns `(text_content, source)` where `source` is `"full"` or `"snippet"`. Uses `beautifulsoup4` with the built-in `html.parser` (no lxml) to strip HTML tags and extract visible text. If fetch fails or returns too little text (< threshold, e.g. 200 chars of visible text after stripping), returns `(None, "snippet")` to signal fallback.
+- `fetch_jd(url: str, timeout: float, min_chars: int) -> tuple[str | None, str]` — returns `(text_content, source)` where `source` is `"full"` or `"snippet"`. Sends a browser User-Agent. Uses `beautifulsoup4` with the built-in `html.parser` (no lxml), drops `script` / `style` / `noscript` / `svg` / `template`, and extracts visible text. If the request fails, returns non-2xx, is not HTML, or returns fewer than `min_chars` of visible text (`jd_min_chars` in settings.yaml, 500), returns `(None, "snippet")` to signal fallback.
 
 **Verification**:
 ```bash
 # 1. Real fetch — pick a known good Greenhouse job page URL from a recent search result
 python -c "
 from job_scanner.jd_client import fetch_jd
-text, source = fetch_jd('https://job-boards.greenhouse.io/anthropic/jobs/4148108008', timeout=15)
+text, source = fetch_jd('https://job-boards.greenhouse.io/anthropic/jobs/4148108008', timeout=15, min_chars=500)
 print(f'Source: {source}, Text length: {len(text) if text else 0}')
 if text: print(text[:500])
 "
-# Expected: source="full", text has readable JD content (> 200 chars).
+# Expected: source="full", text has readable JD content (>= 500 chars).
 
 # 2. JS-heavy page — try a page known to return little text
 python -c "
 from job_scanner.jd_client import fetch_jd
-text, source = fetch_jd('https://careers.google.com/jobs/results/', timeout=15)
+text, source = fetch_jd('https://careers.google.com/jobs/results/', timeout=15, min_chars=500)
 print(f'Source: {source}, Text length: {len(text) if text else 0}')
 "
 # Expected: source="snippet" (too little text or fetch blocked).
@@ -326,13 +328,13 @@ pytest tests/test_jd_client.py -v
 
 **Files touched**:
 - `job_scanner/scoring_client.py` (new)
-- `job_scanner/settings.yaml` (edit — add `scoring.model` key)
+- `job_scanner/settings.yaml` (edit — add `scoring.model`, `scoring.max_tokens`, `scoring.max_jd_chars` keys)
 - `tests/test_scoring_client.py` (new)
 - `tests/fixtures/haiku_score_response.json` (new, scrubbed)
 
 **Out of scope**: No pipeline orchestration. No sheet writes. The client takes a JD (or title+snippet), candidate.md content, and profile.yaml content, and returns a validated pydantic model or raises on validation failure.
 
-**Pydantic schema** (from DESIGN.md sheet schema):
+**Pydantic schema** (from docs/DESIGN.md sheet schema):
 ```
 ScoreResult:
   match_score: float        # 1.0–10.0, validated by pydantic (ge=1.0, le=10.0)
@@ -345,8 +347,10 @@ ScoreResult:
 ```
 
 **What scoring_client.py exposes**:
-- `score_job(jd_text: str, jd_source: str, candidate_md: str, profile_yaml: str, title_hint: str = "", company_hint: str = "") -> ScoreResult` — one Haiku call with structured JSON output. `title_hint` / `company_hint` passed for ATS jobs so Haiku doesn't need to extract them.
-- The Haiku model ID is read from `settings.yaml` under `scoring.model` (e.g. `claude-haiku-...`), not hardcoded. Add a `scoring.model` key to `settings.yaml` in this task.
+- `score_job(jd_text: str, jd_source: str, candidate_md: str, profile_yaml: str, model: str, max_tokens: int, max_jd_chars: int, title_hint: str = "", company_hint: str = "") -> ScoreResult` — one Haiku call, forced tool call (`tool_choice` = the scoring tool), validated with pydantic. JD truncated to `max_jd_chars`. `title_hint` / `company_hint` passed for ATS jobs so Haiku doesn't need to extract them. Snippet inputs get an extra note in the user message.
+- `model`, `max_tokens`, `max_jd_chars` come from `settings.yaml` `scoring` block, passed in by service.py (the client never reads settings.yaml). Add these keys in this task.
+- **Prompt caching**: the system block (generic rules + calibration + `candidate.md` + `profile.yaml`, ~4,600 tokens) has `cache_control: ephemeral`. Haiku 4.5's cache minimum is 4,096 tokens. Each call logs input / output / cache-creation / cache-read tokens; a warning is logged when both cache counters are 0.
+- **Calibration section** in the prompt: bands (9–10, 7–8, 6, 3–5, 1–2), how to apply them, one example per band, snippet-only rules. Generic only — personal rules (F-1 OPT, Seattle bonus) live in `profile.yaml`; profile wins on conflict.
 
 **Verification**:
 ```bash
@@ -358,7 +362,8 @@ dotenv.load_dotenv()
 jd = '''[paste a short JD or use a known one]'''
 candidate = open('config/candidate.md').read()
 profile = open('config/profile.yaml').read()
-result = score_job(jd, 'full', candidate, profile)
+result = score_job(jd, 'full', candidate, profile,
+                   model='claude-haiku-4-5-20251001', max_tokens=2048, max_jd_chars=15000)
 print(result)
 "
 # Expected: ScoreResult with match_score between 1.0 and 10.0, all fields populated.
@@ -385,29 +390,32 @@ pytest tests/test_scoring_client.py -v
 **What each module exposes**:
 
 `sheets_repo.py`:
-- `get_existing_urls(sheet_id: str) -> set[str]` — reads the `url` column from the Jobs tab.
+- `get_existing_urls(sheet_id: str) -> set[str]` — reads the `url` column (`J2:J`) from the Jobs tab, normalized.
 - `append_jobs(sheet_id: str, rows: list[list]) -> None` — appends rows to the Jobs tab.
+- `get_sheet_title(sheet_id: str) -> str` — passthrough to `shared/sheets.get_sheet_title`.
 - Uses `shared/sheets.py` for auth and raw operations.
 
 `service.py`:
 - `run_pipeline(max_jobs: int | None) -> dict` — full pipeline:
   1. Load configs (queries.yaml — both `queries` and `company_sites` sections, companies.yaml, profile.yaml, candidate.md, settings.yaml). Create `run_start` once, tz-aware in the configured timezone: `datetime.now(ZoneInfo(settings["timezone"]))`. Pass it to every `date_utils.parse_relative_date` call (absolute Serper dates become midnight in `run_start`'s timezone, so it must not be UTC or naive).
-  2. Source A: run all enabled search queries AND company_sites queries. Pagination loop lives here in service.py (not in search_client.py): for each query, call `search_client.search()` up to `max_pages_per_query` times, stopping early if a page returns no results.
-  3. Source B: poll all companies from companies.yaml via ats_client (JD text is already included in each list call — no separate fetch step for ATS jobs)
-  4. Merge, normalize URLs, dedup (against sheet + within run)
-  5. Title filter, location filter
+  2. Source B: poll all companies from companies.yaml via ats_client (JD text is already included in each list call — no separate fetch step for ATS jobs)
+  3. Source A: run all enabled search queries AND company_sites queries. Pagination loop lives here in service.py (not in search_client.py): for each query, call `search_client.search()` up to `max_pages_per_query` times, stopping early if a page returns no results or errors.
+  4. Merge (**ATS first, so ATS wins dedup**), normalize URLs, dedup (against sheet + within run). Keep the raw URL alongside for the location filter.
+  5. Title filter, location filter (location filter gets the raw URL)
   6. Convert all dates using `date_utils`: Serper relative dates → `YYYY-MM-DD`, ATS dates → `YYYY-MM-DD`. Sort by full datetime (newest first); jobs without a posted_date go after all dated jobs, in their original order. Apply cap (`max_jobs` or `max_jobs_per_run`).
   7. For each job: ATS jobs already have JD text; search-sourced jobs → fetch JD via jd_client (with snippet fallback). Score via scoring_client.
-  8. Use ATS title/company for ATS jobs, Haiku title/company for search jobs
-  9. Format `date_found` as `YYYY-MM-DD HH:MM` (local time per `timezone` setting). Append to sheet.
-  10. Return summary dict: `{found, new, scored, failed, skipped_cap}`
-- Per-job errors are caught and logged; the job is skipped.
+  8. Use ATS title/company/location for ATS jobs (Haiku location if the ATS one is blank), Haiku title/company/location for search jobs. `source_query` = the query string, or `<ats>:<company>` for ATS jobs.
+  9. Format `date_found` as `YYYY-MM-DD HH:MM` (local time per `timezone` setting). **One append at the end** with all scored rows.
+  10. Return summary dict: `{found, new, filtered, scored, failed, skipped_cap}`
+- Per-job: every exception is caught and logged; the job is skipped. Anthropic `AuthenticationError` / `PermissionDeniedError` are re-raised.
+- Fatal (raise): sheet errors, every search query failed, every scoring attempt failed.
 
 `main.py`:
 - Parse `--max-jobs` arg (optional, overrides `max_jobs_per_run` from settings.yaml)
-- At the start of every run, print the target sheet's title (read from the sheet via `shared/sheets.get_sheet_title()`), e.g. `"Writing to sheet: Job Tracker TEST"`. This makes it immediately obvious whether you're hitting the test or production sheet.
+- `load_dotenv()` first.
+- At the start of every run, print the target sheet's title (read via `sheets_repo.get_sheet_title()`), e.g. `"Writing to sheet: Job Tracker TEST"`. This makes it immediately obvious whether you're hitting the test or production sheet.
 - Call `service.run_pipeline(max_jobs)`
-- Print summary line
+- Print summary line (includes `filtered`). Any exception → log it and exit 1.
 
 **Verification**:
 ```bash
@@ -416,7 +424,7 @@ python -m job_scanner.main --max-jobs 2
 ```
 **Expected output** (approximate):
 ```
-found 42, new 12, scored 2, failed 0, skipped (cap): 10
+found 42, new 12, filtered 2, scored 2, failed 0, skipped (cap): 8
 ```
 - The TEST sheet has 2 new rows appended (or fewer if < 2 new jobs found).
 - Each row has all 13 columns in place (applied is blank, match_score is a number, url is normalized, etc.).
@@ -429,18 +437,40 @@ found 42, new 12, scored 2, failed 0, skipped (cap): 10
 # Idempotency — run again immediately
 python -m job_scanner.main --max-jobs 2
 ```
-**Expected**: run 2 shows `new` reduced by the number scored in run 1, and no URL is written twice.
+**Expected**: new drops by number scored; no URL written twice. (Over-cap jobs aren't written, so they count as new again.)
 
 ---
 
 ## Task 8: GitHub Actions Workflow
 
-**Goal**: Create the cron workflow that runs the scanner twice daily, plus `workflow_dispatch` for manual runs. Decode base64 secrets to files at runtime.
+**Goal**: Create the cron workflow that runs the scanner twice daily, plus `workflow_dispatch` for manual runs. Decode base64 secrets to files at runtime. Add the run logging from the "Logging" section of docs/DESIGN.md.
 
 **Files touched**:
 - `.github/workflows/scan.yaml` (new)
+- `job_scanner/service.py` (edit — funnel / per-query / DROP / JD / SCORES / COST / RUN lines, step summary)
+- `job_scanner/title_filter.py` (edit — return the drop reason)
+- `job_scanner/location_filter.py` (edit — return the drop reason)
+- `job_scanner/ats_client.py` (edit — surface per-company errors to service, see below)
+- `job_scanner/scoring_client.py` (edit — return token usage to service, see below)
+- `job_scanner/settings.yaml` (edit — add per-model prices)
+- `tests/test_service.py`, `tests/test_title_filter.py`, `tests/test_location_filter.py`, `tests/test_ats_client.py`, `tests/test_scoring_client.py` (edit)
 
-**Out of scope**: No email_finder in CI. No README yet.
+**Out of scope**: No email_finder in CI. No README yet. No Runs/Errors tab, no log files, no artifacts. No change to the final summary line.
+
+**Logging build details** (spec in docs/DESIGN.md "Logging"):
+- **Prefixes**: each key line's message starts with `RUN`, `ATS`, `QUERY`, `FUNNEL`, `DROP`, `JD`, `FAIL`, `SCORES` or `COST`. The existing `Writing to sheet: <title>` line and the final summary line stay as they are.
+- **Header (`RUN`)**: run start (configured tz), effective cap (after `--max-jobs`), `ats_lookback_days`, `scoring.model`, existing URL count from the sheet.
+- **ATS**: totals (companies polled, jobs within lookback); list of companies with 0 jobs; list of companies with errors (slug + HTTP status, or error type for request/JSON failures). Today `ats_client` logs the warning and returns `[]` for both "no jobs" and "error", so service can't tell them apart: change ats_client to report the error to the caller, keeping "one company never crashes the run".
+- **QUERY**: per query: pages fetched, results, new (after dedup), passed filters, new+passed from page 2+ (tag each search job with its page number). Search errors as `FAIL search` lines (query name + HTTP status). One closing line with total Serper calls this run (every request sent).
+- **FUNNEL**: found, dupes (sheet), dupes (in-run), no URL, new, title dropped, location dropped, eligible, over cap. Numbers must add up (`found = dupes + no URL + new`, `new = title dropped + location dropped + eligible`). `_dedup` must count sheet vs in-run dupes separately.
+- **DROP**: one line per filtered job with title + URL. Title drops: the matched exclude keyword, or `no include match`. Location drops: matched keyword + where it matched (`location` / `title` / `snippet` / `url`). `title_filter` and `location_filter` return the matched reason (`None` = passes) instead of a bool; update their tests to assert the reason. Over-cap: count in `FUNNEL`; `DROP cap` lines with titles only when the count > 0.
+- **FAIL (per job)**: URL + error type only. Today's scoring-failure warning also prints the exception message; drop it.
+- **JD**: counts of full fetched, snippet fallback (search fetch fallbacks + ATS jobs with empty JD text), ATS full.
+- **SCORES**: histogram buckets 8–10, 6–7.9, 3–5.9, 1–2.9.
+- **COST**: summed input, output, cache read, cache write tokens; estimated cost. `score_job` currently only logs usage per call, so it must also return it (e.g. alongside the `ScoreResult`). Prices per model (per million tokens: input, output, cache read, cache write) go in a new `settings.yaml` block keyed by model ID — never hardcoded. If the configured model has no price entry, log cost as unknown; never fail the run.
+- **RUN (end)**: elapsed time.
+- **`$GITHUB_STEP_SUMMARY`**: if the env var is set, append a short markdown summary (funnel table, per-query table, score histogram, cost). If unset, skip silently. A write failure logs a warning and never fails the run.
+- **Never log** JD text, profile/candidate contents, or secrets.
 
 **Secrets needed** (to be set in GitHub repo settings):
 - `SERPER_API_KEY`
@@ -451,10 +481,10 @@ python -m job_scanner.main --max-jobs 2
 - `CANDIDATE_MD_B64` (base64-encoded config/candidate.md)
 
 **Workflow behavior**:
-1. Cron: two schedule entries — `cron: '7 9 * * *'` and `cron: '7 21 * * *'`, each with `timezone: "America/Chicago"` (9:07 AM and 9:07 PM Chicago time, DST handled automatically; off the hour because top-of-hour scheduled runs are often delayed).
+1. Cron: two schedule entries — `cron: '7 9 * * *'` and `cron: '7 21 * * *'`, each with `timezone: "America/Chicago"` (9:07 AM and 9:07 PM Chicago time, DST handled automatically; off the hour because top-of-hour scheduled runs are often delayed). **Verify the schedule `timezone` field against GitHub docs before relying on it (fallback: UTC cron, e.g. `7 14 * * *` / `7 2 * * *` for CDT, accepting a 1-hour DST shift).**
 2. `workflow_dispatch`: manual trigger with optional `max_jobs` input.
 3. `concurrency`: group `job-scanner` with `cancel-in-progress: false`. Prevents two runs (e.g. a cron trigger and a manual "Run workflow" click) from overlapping and both appending the same jobs to the real sheet. The second run queues until the first finishes.
-4. `timeout-minutes: 20` — prevents a hung run from burning Actions minutes indefinitely.
+4. `timeout-minutes: 30` — prevents a hung run from burning Actions minutes indefinitely (cap 150 = up to 150 JD fetches + Haiku calls).
 5. Setup: checkout, Python 3.13, pip install.
 6. Decode secrets: write `GOOGLE_SERVICE_ACCOUNT_B64` → `service_account.json`, `PROFILE_YAML_B64` → `config/profile.yaml`, `CANDIDATE_MD_B64` → `config/candidate.md`.
 7. Set env vars: `SERPER_API_KEY`, `ANTHROPIC_API_KEY`, `SHEET_ID`, `GOOGLE_APPLICATION_CREDENTIALS=service_account.json`.
@@ -477,9 +507,17 @@ python -c "import yaml; yaml.safe_load(open('.github/workflows/scan.yaml'))"
 
 # 3. Concurrency check — trigger a second manual run while the first is still running.
 # Expected: second run queues (status "queued"), does NOT cancel the first.
+
+# 4. Logging — unit tests + the max_jobs=2 run above
+pytest -v
+# Expected: all pass, including filter tests asserting the drop reason.
+# In the Actions run log: RUN, ATS, QUERY, FUNNEL, JD, SCORES, COST lines present;
+# FUNNEL numbers add up; no JD text or profile/candidate content anywhere.
+# The run page shows the markdown step summary.
+# Locally (GITHUB_STEP_SUMMARY unset): same log lines, no error about the summary.
 ```
 
-**Cron times note**: The `timezone` field makes GitHub convert automatically — no manual UTC math, no DST drift.
+**Cron times note**: If GitHub supports the schedule `timezone` field, it converts automatically — no manual UTC math, no DST drift. Confirm in GitHub docs; otherwise use the UTC fallback above.
 
 ---
 
@@ -556,7 +594,7 @@ python -m email_finder.main "https://www.LinkedIn.com/in/Some-Test-Person"
 **Files touched**:
 - `README.md` (new)
 
-**Out of scope**: No code changes. No DESIGN.md changes.
+**Out of scope**: No code changes. No docs/DESIGN.md changes.
 
 **README sections**:
 1. **What this does** — one paragraph
@@ -566,7 +604,11 @@ python -m email_finder.main "https://www.LinkedIn.com/in/Some-Test-Person"
 5. **GitHub Actions** — how to set secrets, how to trigger manually, cron schedule
 6. **Testing** — `pytest` command, what the test sheet is for
 7. **Config files** — what profile.yaml, candidate.md, settings.yaml, queries.yaml, companies.yaml do
-8. **Architecture** — brief pointer to DESIGN.md
+8. **Logs** — where to find run logs (Actions tab → run → job log, plus the run's step summary), retention (90 days by default), the fixed prefixes (`QUERY`, `DROP`, `FUNNEL`, `SCORES`, `COST`, …) and what each means, and this export command for a multi-run review:
+   ```bash
+   gh run list --workflow scan.yaml --limit 30 --json databaseId -q '.[].databaseId' | xargs -I{} gh run view {} --log | grep -E "DROP|QUERY|FUNNEL|SCORES|COST" > review.txt
+   ```
+9. **Architecture** — brief pointer to docs/DESIGN.md
 
 **Verification**:
 ```bash
