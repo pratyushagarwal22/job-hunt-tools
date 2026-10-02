@@ -1,6 +1,5 @@
 import html
 import json
-import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -9,7 +8,12 @@ import pytest
 import requests
 
 from job_scanner import ats_client
-from job_scanner.ats_client import list_ashby_jobs, list_greenhouse_jobs, list_lever_jobs
+from job_scanner.ats_client import (
+    AtsError,
+    list_ashby_jobs,
+    list_greenhouse_jobs,
+    list_lever_jobs,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 JOB_KEYS = {"title", "company", "location", "url", "posted_date", "jd_text", "source"}
@@ -217,27 +221,33 @@ def test_greenhouse_falls_back_to_updated_at():
 
 @pytest.mark.parametrize("fn", [list_greenhouse_jobs, list_lever_jobs, list_ashby_jobs])
 @pytest.mark.parametrize("status", [404, 500])
-def test_non_2xx_returns_empty_and_logs(fn, status, caplog):
-    with caplog.at_level(logging.WARNING, logger=ats_client.__name__):
-        jobs, _ = _call(fn, {"error": "not found"}, status=status)
-    assert jobs == []
-    assert "acme" in caplog.text
-    assert str(status) in caplog.text
+def test_non_2xx_raises_ats_error_with_status(fn, status):
+    with pytest.raises(AtsError) as info:
+        _call(fn, {"error": "not found"}, status=status)
+    assert info.value.detail == f"HTTP {status}"
+    assert "acme" in str(info.value)
 
 
 @pytest.mark.parametrize("fn", [list_greenhouse_jobs, list_lever_jobs, list_ashby_jobs])
-def test_request_exception_returns_empty(fn, caplog):
+def test_request_exception_raises_ats_error_with_type(fn):
     with patch.object(
         ats_client.requests, "get", side_effect=requests.ConnectionError("boom")
     ):
-        with caplog.at_level(logging.WARNING, logger=ats_client.__name__):
-            jobs = fn("acme", "Acme Inc", lookback_days=7)
-    assert jobs == []
-    assert "acme" in caplog.text
+        with pytest.raises(AtsError) as info:
+            fn("acme", "Acme Inc", lookback_days=7)
+    assert info.value.detail == "ConnectionError"
+    assert "acme" in str(info.value)
 
 
-def test_invalid_json_returns_empty():
+def test_invalid_json_raises_ats_error():
     resp = _response(None)
     resp.json.side_effect = ValueError("no json")
     with patch.object(ats_client.requests, "get", return_value=resp):
-        assert list_ashby_jobs("acme", "Acme Inc", lookback_days=7) == []
+        with pytest.raises(AtsError) as info:
+            list_ashby_jobs("acme", "Acme Inc", lookback_days=7)
+    assert info.value.detail == "invalid JSON"
+
+
+def test_empty_board_returns_empty_list():
+    jobs, _ = _call(list_greenhouse_jobs, {"jobs": []})
+    assert jobs == []

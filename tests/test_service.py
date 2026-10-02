@@ -4,13 +4,16 @@ from datetime import datetime, timedelta, timezone
 import anthropic
 import httpx2
 import pytest
+import requests
 
 from job_scanner import service
-from job_scanner.scoring_client import ScoreResult
+from job_scanner.ats_client import AtsError
+from job_scanner.scoring_client import ScoreResult, Usage
 
 TZ = "America/Chicago"
 QUERY_A = 'site:jobs.example.com ("Software Engineer")'
 QUERY_B = 'site:careers.example.org ("Software Engineer")'
+USAGE_PER_CALL = Usage(input=1000, output=200, cache_read=4000, cache_write=500)
 
 
 def _settings(**overrides) -> dict:
@@ -94,6 +97,7 @@ class Harness:
             profile_yaml="PROFILE",
         )
         monkeypatch.setenv("SHEET_ID", "sheet-123")
+        monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
         monkeypatch.setattr(service, "_load_config", lambda: config)
         monkeypatch.setattr(service.search_client, "search", self._search)
         for ats in ("greenhouse", "lever", "ashby"):
@@ -113,7 +117,10 @@ class Harness:
 
     def _ats(self, ats):
         def list_jobs(slug, company, lookback_days, timeout=15):
-            return [dict(job, source=ats) for job in self.ats_jobs.get(slug, [])]
+            jobs = self.ats_jobs.get(slug, [])
+            if isinstance(jobs, Exception):
+                raise jobs
+            return [dict(job, source=ats) for job in jobs]
         return list_jobs
 
     def _fetch_jd(self, url, timeout, min_chars):
@@ -122,9 +129,8 @@ class Harness:
 
     def _score(self, **kwargs):
         self.score_calls.append(kwargs)
-        if self.score_impl:
-            return self.score_impl(**kwargs)
-        return _score_result()
+        result = self.score_impl(**kwargs) if self.score_impl else _score_result()
+        return result, USAGE_PER_CALL
 
     def _existing(self, sheet_id):
         assert sheet_id == "sheet-123"
@@ -190,9 +196,38 @@ def test_title_and_location_filters_applied(monkeypatch):
         "https://ats.example.com/india-title",
         "https://ats.example.com/ok",
         "https://jobs.example.com/keep",
+        "https://jobs.example.com/snip",
     ]
-    assert summary["filtered"] == 5
+    assert summary["filtered"] == 4
     assert summary["new"] == 8
+
+
+def test_always_allow_and_us_signals_read_from_settings(monkeypatch):
+    h = Harness(
+        monkeypatch,
+        settings=_settings(
+            title_filter=dict(include=["Software Engineer"], exclude=["Senior", "Staff"],
+                              always_allow=["Member of Technical Staff"]),
+            location_filter=dict(exclude=["London", "Zurich"], us_signals=["New York"]),
+        ),
+        search_pages={QUERY_A: [[
+            _search_result("https://s.example.com/mts", title="Member of Technical Staff"),
+            _search_result("https://s.example.com/smts", title="Senior Member of Technical Staff"),
+            _search_result("https://s.example.com/ny", title="Software Engineer, New York or Zurich"),
+            _search_result("https://s.example.com/zh", title="Software Engineer, Zurich"),
+            _search_result("https://s.example.com/snip", snippet="Offices in Zurich"),
+        ]]},
+        ats_jobs={"acme": [_ats_job("https://a.example.com/both", location="New York; London")]},
+    )
+
+    service.run_pipeline(None)
+
+    assert sorted(h.urls()) == [
+        "https://a.example.com/both",
+        "https://s.example.com/mts",
+        "https://s.example.com/ny",
+        "https://s.example.com/snip",
+    ]
 
 
 def test_sorted_newest_first_undated_last_in_original_order(monkeypatch):
@@ -574,3 +609,353 @@ def test_sheet_append_error_is_fatal(monkeypatch):
 
     with pytest.raises(RuntimeError, match="Sheets"):
         service.run_pipeline(None)
+
+
+# --- run logging ---
+
+PRICES = {"test-model": dict(input=1.0, output=10.0, cache_read=0.1, cache_write=2.0)}
+LONG_ERROR = "x" * 300 + "\nsecond line"
+
+
+def _messages(caplog, prefix: str) -> list[str]:
+    return [r.getMessage() for r in caplog.records if r.getMessage().startswith(prefix)]
+
+
+def _funnel_harness(monkeypatch, extra_pages=None, **overrides):
+    """found 11 = sheet 1 + in-run 1 + no URL 1 + new 8; new 8 = title 1 + location 1 + eligible 6;
+    eligible 6 = over cap 1 + experience 1 + scored 3 + failed 1 (with cap 5)."""
+    scores = {"keep-a": 9.0, "dup1": 6.0, "keep-b": 2.9}
+
+    def score(**kwargs):
+        if "/fail" in kwargs["jd_text"]:
+            raise ValueError(LONG_ERROR)
+        name = kwargs["jd_text"].rsplit("/", 1)[-1]
+        return _score_result(match_score=scores[name])
+
+    params = dict(
+        settings=_settings(prices=PRICES),
+        existing={"https://s.example.com/old"},
+        companies=[],
+        search_pages={QUERY_A: [
+            [
+                _search_result("https://s.example.com/old"),
+                _search_result("https://s.example.com/dup1"),
+                _search_result("https://s.example.com/dup1?ref=x"),
+                _search_result(""),
+                _search_result("https://s.example.com/senior", title="Senior Software Engineer"),
+                _search_result("https://s.example.com/london", title="Software Engineer London"),
+                _search_result("https://s.example.com/keep-a", date="1 hour ago"),
+                _search_result("https://s.example.com/keep-b"),
+            ],
+            [
+                _search_result("https://s.example.com/exp", snippet="Requires 5+ years of experience."),
+                _search_result("https://s.example.com/fail"),
+                _search_result("https://s.example.com/keep-c"),
+            ],
+        ]},
+        jd={"https://s.example.com/exp": (None, "snippet")},
+        score=score,
+    )
+    params["search_pages"].update(extra_pages or {})
+    params.update(overrides)
+    return Harness(monkeypatch, **params)
+
+
+def test_funnel_numbers_add_up(monkeypatch, caplog):
+    _funnel_harness(monkeypatch)
+
+    with caplog.at_level("INFO", logger="job_scanner"):
+        summary = service.run_pipeline(5)
+
+    assert _messages(caplog, "FUNNEL") == [
+        "FUNNEL found 11 = dupes (sheet) 1 + dupes (in-run) 1 + no URL 1 + new 8"
+        " | new = title dropped 1 + location dropped 1 + eligible 6"
+        " | eligible = over cap 1 + experience dropped 1 + scored 3 + failed 1"
+    ]
+    assert summary == dict(found=11, new=8, filtered=3, scored=3, failed=1, skipped_cap=1)
+
+
+def test_drop_lines_per_filtered_job(monkeypatch, caplog):
+    _funnel_harness(monkeypatch)
+
+    with caplog.at_level("INFO", logger="job_scanner"):
+        service.run_pipeline(5)
+
+    assert _messages(caplog, "DROP") == [
+        "DROP title Senior | Senior Software Engineer | https://s.example.com/senior",
+        "DROP location London (title) | Software Engineer London | https://s.example.com/london",
+        "DROP cap | Software Engineer | https://s.example.com/keep-c",
+        "DROP experience 5 | 5+ years of experience | Software Engineer | https://s.example.com/exp",
+    ]
+
+
+def test_drop_title_no_include_match_and_location_where(monkeypatch, caplog):
+    Harness(
+        monkeypatch,
+        search_pages={QUERY_A: [[
+            _search_result("https://s.example.com/pm", title="Product Designer"),
+            _search_result("https://s.example.com/x?location=India"),
+        ]]},
+        ats_jobs={"acme": [_ats_job("https://a.example.com/ldn", location="London, UK")]},
+    )
+
+    with caplog.at_level("INFO", logger="job_scanner"):
+        service.run_pipeline(None)
+
+    assert sorted(_messages(caplog, "DROP")) == [
+        "DROP location India (url) | Software Engineer | https://s.example.com/x",
+        "DROP location London (location) | Software Engineer | https://a.example.com/ldn",
+        "DROP title no include match | Product Designer | https://s.example.com/pm",
+    ]
+
+
+def test_snippet_only_non_us_mention_is_not_dropped(monkeypatch, caplog):
+    h = Harness(
+        monkeypatch,
+        search_pages={QUERY_A: [[
+            _search_result("https://s.example.com/snip", snippet="Join our team in Bangalore."),
+        ]]},
+    )
+
+    with caplog.at_level("INFO", logger="job_scanner"):
+        service.run_pipeline(None)
+
+    assert h.urls() == ["https://s.example.com/snip"]
+    assert _messages(caplog, "DROP location") == []
+
+
+def test_pipe_in_title_replaced_in_drop_lines(monkeypatch, caplog):
+    Harness(
+        monkeypatch,
+        search_pages={QUERY_A: [[
+            _search_result("https://s.example.com/krk", title="Software Engineer (Hybrid | London)"),
+            _search_result("https://s.example.com/sr", title="Senior Software Engineer | Payments"),
+            _search_result("https://s.example.com/cap1", title="Software Engineer | A"),
+            _search_result("https://s.example.com/cap2", title="Software Engineer | B"),
+        ]]},
+        jd={"https://s.example.com/cap1": ("Requires 5+ years of experience. " * 20, "full")},
+    )
+
+    with caplog.at_level("INFO", logger="job_scanner"):
+        service.run_pipeline(1)
+
+    assert _messages(caplog, "DROP") == [
+        "DROP location London (title) | Software Engineer (Hybrid / London) | https://s.example.com/krk",
+        "DROP title Senior | Senior Software Engineer / Payments | https://s.example.com/sr",
+        "DROP cap | Software Engineer / B | https://s.example.com/cap2",
+        "DROP experience 5 | 5+ years of experience | Software Engineer / A | https://s.example.com/cap1",
+    ]
+
+
+def test_no_cap_drop_lines_when_under_cap(monkeypatch, caplog):
+    _funnel_harness(monkeypatch)
+
+    with caplog.at_level("INFO", logger="job_scanner"):
+        service.run_pipeline(None)
+
+    assert _messages(caplog, "DROP cap") == []
+
+
+def test_fail_job_line_has_url_type_and_truncated_message(monkeypatch, caplog):
+    _funnel_harness(monkeypatch)
+
+    with caplog.at_level("INFO", logger="job_scanner"):
+        service.run_pipeline(5)
+
+    (line,) = _messages(caplog, "FAIL job")
+    prefix = "FAIL job https://s.example.com/fail | ValueError: "
+    assert line.startswith(prefix)
+    message = line[len(prefix):]
+    assert len(message) == 150
+    assert message.endswith("...")
+    assert "\n" not in line
+
+
+def test_short_fail_message_kept_whole(monkeypatch, caplog):
+    def score(**kwargs):
+        raise KeyError("unexpected")
+
+    Harness(monkeypatch, search_pages={QUERY_A: [[_search_result("https://s.example.com/a")]]},
+            score=score)
+
+    with caplog.at_level("INFO", logger="job_scanner"), pytest.raises(RuntimeError):
+        service.run_pipeline(None)
+
+    assert _messages(caplog, "FAIL job") == ["FAIL job https://s.example.com/a | KeyError: 'unexpected'"]
+
+
+def test_query_lines_and_serper_call_total(monkeypatch, caplog):
+    _funnel_harness(
+        monkeypatch,
+        company_sites=[dict(name="B", query=QUERY_B, enabled=True),
+                       dict(name="C", query="site:c.example.com", enabled=True)],
+        extra_pages={"site:c.example.com": requests.ConnectTimeout("timed out")},
+    )
+
+    with caplog.at_level("INFO", logger="job_scanner"):
+        service.run_pipeline(5)
+
+    assert _messages(caplog, "QUERY") == [
+        "QUERY A | pages 2 | results 11 | new 8 | passed 6 | new+passed from page 2+ 3",
+        "QUERY B | pages 1 | results 0 | new 0 | passed 0 | new+passed from page 2+ 0",
+        "QUERY C | pages 0 | results 0 | new 0 | passed 0 | new+passed from page 2+ 0",
+        "QUERY total Serper calls 4",
+    ]
+    assert _messages(caplog, "FAIL search") == ["FAIL search C page 1 | ConnectTimeout"]
+
+
+def test_fail_search_line_has_http_status(monkeypatch, caplog):
+    Harness(
+        monkeypatch,
+        company_sites=[dict(name="B", query=QUERY_B, enabled=True)],
+        search_pages={QUERY_A: RuntimeError("Serper search failed: HTTP 500"),
+                      QUERY_B: [[_search_result("https://s.example.com/b")]]},
+    )
+
+    with caplog.at_level("INFO", logger="job_scanner"):
+        service.run_pipeline(None)
+
+    assert _messages(caplog, "FAIL search") == ["FAIL search A page 1 | HTTP 500"]
+
+
+def test_ats_lines_list_empty_and_errored_companies(monkeypatch, caplog):
+    Harness(
+        monkeypatch,
+        queries=[],
+        companies=[
+            dict(name="Acme", ats="greenhouse", slug="acme"),
+            dict(name="Beta", ats="lever", slug="beta"),
+            dict(name="Gamma", ats="ashby", slug="gamma"),
+            dict(name="Delta", ats="workday", slug="delta"),
+        ],
+        ats_jobs={"acme": [_ats_job("https://a.example.com/1")],
+                  "gamma": AtsError("ashby", "gamma", "HTTP 404")},
+    )
+
+    with caplog.at_level("INFO", logger="job_scanner"):
+        summary = service.run_pipeline(None)
+
+    assert _messages(caplog, "ATS") == [
+        "ATS polled 4 companies | 1 jobs within 3-day lookback",
+        "ATS 0 jobs (1): Beta",
+        "ATS errors (2): ashby:gamma (HTTP 404), workday:delta (unknown ats)",
+    ]
+    assert summary["scored"] == 1
+
+
+def test_jd_scores_and_cost_lines(monkeypatch, caplog):
+    _funnel_harness(monkeypatch)
+
+    with caplog.at_level("INFO", logger="job_scanner"):
+        service.run_pipeline(5)
+
+    assert _messages(caplog, "JD") == ["JD full fetched 4 | snippet fallback 1 | ATS full 0"]
+    assert _messages(caplog, "SCORES") == ["SCORES 8-10: 1 | 6-7.9: 1 | 3-5.9: 0 | 1-2.9: 1"]
+    # 3 calls: (3000*1 + 600*10 + 12000*0.1 + 1500*2) / 1e6
+    assert _messages(caplog, "COST") == [
+        "COST input 3000 | output 600 | cache read 12000 | cache write 1500 | est $0.0132 (test-model)"
+    ]
+
+
+def test_jd_counts_ats_full_and_ats_snippet(monkeypatch, caplog):
+    Harness(
+        monkeypatch,
+        queries=[],
+        ats_jobs={"acme": [_ats_job("https://a.example.com/full"),
+                           _ats_job("https://a.example.com/empty", jd_text="")]},
+    )
+
+    with caplog.at_level("INFO", logger="job_scanner"):
+        service.run_pipeline(None)
+
+    assert _messages(caplog, "JD") == ["JD full fetched 0 | snippet fallback 1 | ATS full 1"]
+
+
+@pytest.mark.parametrize("prices", [
+    None,
+    {},
+    {"other-model": PRICES["test-model"]},
+    {"test-model": dict(input=1.0, output=10.0)},
+    {"test-model": "free"},
+])
+def test_cost_unknown_when_model_has_no_valid_price(monkeypatch, caplog, prices):
+    settings = _settings() if prices is None else _settings(prices=prices)
+    h = Harness(monkeypatch, settings=settings,
+                search_pages={QUERY_A: [[_search_result("https://s.example.com/a")]]})
+
+    with caplog.at_level("INFO", logger="job_scanner"):
+        service.run_pipeline(None)
+
+    (line,) = _messages(caplog, "COST")
+    assert line.endswith("| cost unknown (test-model)")
+    assert len(h.rows) == 1
+
+
+def test_run_start_and_end_lines(monkeypatch, caplog):
+    _funnel_harness(monkeypatch)
+
+    with caplog.at_level("INFO", logger="job_scanner"):
+        service.run_pipeline(5)
+
+    (start,) = _messages(caplog, "RUN start")
+    assert re.fullmatch(
+        r"RUN start \d{4}-\d{2}-\d{2} \d{2}:\d{2} C[DS]T \| cap 5 \| ats_lookback_days 3"
+        r" \| model test-model \| existing URLs 1",
+        start,
+    )
+    (end,) = _messages(caplog, "RUN end")
+    assert re.fullmatch(r"RUN end \| elapsed \d+\.\ds", end)
+
+
+def test_report_logged_even_when_every_scoring_attempt_fails(monkeypatch, caplog):
+    def score(**kwargs):
+        raise ValueError("bad")
+
+    Harness(monkeypatch, search_pages={QUERY_A: [[_search_result("https://s.example.com/a")]]},
+            score=score)
+
+    with caplog.at_level("INFO", logger="job_scanner"), pytest.raises(RuntimeError):
+        service.run_pipeline(None)
+
+    assert len(_messages(caplog, "FUNNEL")) == 1
+    assert len(_messages(caplog, "COST")) == 1
+
+
+def test_logs_never_contain_jd_or_personal_content(monkeypatch, caplog):
+    _funnel_harness(monkeypatch)
+
+    with caplog.at_level("DEBUG", logger="job_scanner"):
+        service.run_pipeline(5)
+
+    for secret in ("Fetched full JD", "CANDIDATE", "PROFILE"):
+        assert secret not in caplog.text
+
+
+def test_step_summary_written_when_env_set(monkeypatch, tmp_path):
+    _funnel_harness(monkeypatch)
+    summary_file = tmp_path / "summary.md"
+    summary_file.write_text("existing\n")
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_file))
+
+    service.run_pipeline(5)
+
+    text = summary_file.read_text()
+    assert text.startswith("existing\n")
+    assert "## Job Scanner run" in text
+    assert "| Found | 11 |" in text
+    assert "| Experience dropped | 1 |" in text
+    assert "| A | 2 | 11 | 8 | 6 | 3 |" in text
+    assert "| 8-10 | 6-7.9 | 3-5.9 | 1-2.9 |" in text
+    assert "| 1 | 1 | 0 | 1 |" in text
+    assert "est $0.0132 (test-model)" in text
+
+
+def test_step_summary_write_failure_is_not_fatal(monkeypatch, tmp_path, caplog):
+    h = _funnel_harness(monkeypatch)
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path))
+
+    with caplog.at_level("WARNING", logger="job_scanner"):
+        service.run_pipeline(5)
+
+    assert "GITHUB_STEP_SUMMARY" in caplog.text
+    assert len(h.rows) == 3

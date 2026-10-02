@@ -11,6 +11,8 @@ from job_scanner import service, sheets_repo
 
 logger = logging.getLogger("job_scanner.main")
 
+REQUIRED_ENV_VARS = ("SHEET_ID", "SERPER_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS")
+
 
 def main(argv: list[str] | None = None) -> int:
     load_dotenv()
@@ -22,10 +24,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    missing = [name for name in REQUIRED_ENV_VARS if not os.environ.get(name)]
+    if missing:
+        logger.error("Missing required environment variable(s): %s", ", ".join(missing))
+        return 1
+
     try:
-        sheet_id = os.environ.get("SHEET_ID")
-        if not sheet_id:
-            raise RuntimeError("SHEET_ID is not set")
+        sheet_id = os.environ["SHEET_ID"]
         print(f"Writing to sheet: {sheets_repo.get_sheet_title(sheet_id)}", flush=True)
         summary = service.run_pipeline(args.max_jobs)
     except Exception:

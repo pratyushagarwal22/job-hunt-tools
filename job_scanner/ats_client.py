@@ -1,15 +1,16 @@
-"""Greenhouse, Lever and Ashby public job board API clients. One GET per company."""
+"""Greenhouse, Lever and Ashby public job board API clients. One GET per company.
+
+A failed request, non-2xx status or non-JSON body raises AtsError; the caller decides
+whether to skip the company.
+"""
 
 import html
-import logging
 from datetime import datetime, timedelta, timezone
 
 import requests
 from bs4 import BeautifulSoup
 
 from job_scanner import date_utils
-
-logger = logging.getLogger(__name__)
 
 _GREENHOUSE_URL = "https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true"
 _LEVER_URL = "https://api.lever.co/v0/postings/{slug}"
@@ -20,8 +21,6 @@ def list_greenhouse_jobs(
     slug: str, company: str, lookback_days: int, timeout: float = 15
 ) -> list[dict]:
     body = _get_json(_GREENHOUSE_URL.format(slug=slug), "greenhouse", slug, timeout)
-    if body is None:
-        return []
 
     jobs = []
     for item in body.get("jobs", []):
@@ -43,8 +42,6 @@ def list_lever_jobs(
     slug: str, company: str, lookback_days: int, timeout: float = 15
 ) -> list[dict]:
     body = _get_json(_LEVER_URL.format(slug=slug), "lever", slug, timeout)
-    if body is None:
-        return []
 
     jobs = []
     for item in body:
@@ -66,8 +63,6 @@ def list_ashby_jobs(
     slug: str, company: str, lookback_days: int, timeout: float = 15
 ) -> list[dict]:
     body = _get_json(_ASHBY_URL.format(slug=slug), "ashby", slug, timeout)
-    if body is None:
-        return []
 
     jobs = []
     for item in body.get("jobs", []):
@@ -86,20 +81,25 @@ def list_ashby_jobs(
     return _within_lookback(jobs, lookback_days)
 
 
+class AtsError(Exception):
+    """One company's board could not be listed. `detail` is e.g. "HTTP 404" or "ConnectTimeout"."""
+
+    def __init__(self, ats: str, slug: str, detail: str):
+        super().__init__(f"{ats} slug {slug!r}: {detail}")
+        self.detail = detail
+
+
 def _get_json(url: str, ats: str, slug: str, timeout: float):
     try:
         response = requests.get(url, timeout=timeout)
     except requests.RequestException as exc:
-        logger.warning("%s slug %r: request failed: %s", ats, slug, exc)
-        return None
+        raise AtsError(ats, slug, type(exc).__name__) from exc
     if not response.ok:
-        logger.warning("%s slug %r: HTTP %s", ats, slug, response.status_code)
-        return None
+        raise AtsError(ats, slug, f"HTTP {response.status_code}")
     try:
         return response.json()
     except ValueError:
-        logger.warning("%s slug %r: response is not JSON", ats, slug)
-        return None
+        raise AtsError(ats, slug, "invalid JSON") from None
 
 
 def _html_to_text(markup: str) -> str:

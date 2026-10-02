@@ -5,6 +5,7 @@ force_tool_choice=True forces the tool call; False uses tool_choice auto with a 
 """
 
 import logging
+from dataclasses import dataclass
 
 import anthropic
 from pydantic import BaseModel, Field, ValidationError, field_validator
@@ -40,6 +41,14 @@ class ScoreResult(BaseModel):
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             return round(value, 1)
         return value
+
+
+@dataclass(frozen=True)
+class Usage:
+    input: int = 0
+    output: int = 0
+    cache_read: int = 0
+    cache_write: int = 0
 
 
 def _tool_schema() -> dict:
@@ -160,7 +169,7 @@ def score_job(
     force_tool_choice: bool,
     title_hint: str = "",
     company_hint: str = "",
-) -> ScoreResult:
+) -> tuple[ScoreResult, Usage]:
     """force_tool_choice=False is for models that reject a forced tool_choice (Sonnet/Opus 5.5)."""
     truncated = len(jd_text) > max_jd_chars
     jd_text = jd_text[:max_jd_chars]
@@ -229,8 +238,14 @@ def score_job(
     )
     if tool_input is None:
         raise ValueError(f"No {_TOOL_NAME} tool call in response (stop_reason={response.stop_reason})")
+    tokens = Usage(
+        input=usage.input_tokens or 0,
+        output=usage.output_tokens or 0,
+        cache_read=cache_read,
+        cache_write=cache_creation,
+    )
     try:
-        return ScoreResult.model_validate(tool_input)
+        return ScoreResult.model_validate(tool_input), tokens
     except ValidationError as exc:
         problems = "; ".join(
             f"{'.'.join(map(str, e['loc'])) or '<root>'}: {e['msg']}"

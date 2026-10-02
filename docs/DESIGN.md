@@ -81,8 +81,8 @@ job-hunt-tools/
 4. Merge into one list, **ATS jobs first**, so when the same URL comes from both sources the ATS copy (structured title/company/location + full JD) wins dedup.
 5. Normalize URLs (`url_utils.normalize_url`): strip `utm_*`, `ref`, `source`, `gh_src`, `team`, `page`, `location`, `action`, fragments, trailing slashes and a trailing `/apply` path segment. Lowercase scheme + domain, keep path case. Never strip `gh_jid` or `id` (job IDs on some career sites). The normalized URL is the dedup key and the value stored in the sheet. Jobs with no URL are dropped.
 6. Deduplicate: against existing URLs in the "Jobs" sheet AND within the current run
-7. Title keyword filter (include/exclude lists from `settings.yaml`, case-insensitive, whole-word)
-8. Location filter: drop jobs whose location is clearly outside the US (non-US keyword list in `settings.yaml`). For ATS jobs, check the location field. For search results (no structured location field), check the title + snippet text and the **raw** (pre-normalization, URL-decoded) URL — normalization strips params like `?location=` that the filter needs (catches locations in URLs, e.g. NVIDIA's `Taiwan-Taipei` or Google's `?location=India`). Keep US locations, "Remote", "Remote - US", and blank/unknown.
+7. Title keyword filter (`title_filter` in `settings.yaml`, case-insensitive, whole-word): at least one `include` keyword and no `exclude` keyword. `always_allow` phrases (currently "Member of Technical Staff") count as an include match and are removed from the title before the exclude check, so "Member of Technical Staff" passes but "Senior Member of Technical Staff" drops on "Senior". Include covers SWE / SDE / Developer / Frontend / Front End / UI / Mobile / iOS / Android / Backend / Full Stack and early-career titles; exclude covers seniority (Senior, Sr, Staff, Principal, Lead, …), interns, embedded/firmware, nursing, and non-engineering "Developer" roles (Developer Advocate, Developer Relations, Business Developer).
+8. Location filter: drop jobs whose location is clearly outside the US (`location_filter.exclude` in `settings.yaml`), unless a US signal (`location_filter.us_signals`) appears in any checked field — so "New York or Zurich" or "San Francisco; London" is kept. US signals: "United States", "USA", "U.S.", "Remote - US", "Remote (US)", "US Remote", full state names (except Georgia) and major US tech cities. Never bare "US" or two-letter state codes ("us" matches "join us"). For ATS jobs, check the location field. For search results (no structured location field), check the title and the **raw** (pre-normalization, URL-decoded) URL — not the snippet, which often mentions other offices or teams (scorer's non-US hard blocker catches the rest) — normalization strips params like `?location=` that the filter needs (catches locations in URLs, e.g. NVIDIA's `Taiwan-Taipei` or Google's `?location=India`). Keep US locations, "Remote", "Remote - US", and blank/unknown.
 9. Apply score cap (`max_jobs_per_run`, default 150, overridable via `--max-jobs`). Newest jobs first — sort on the full datetime (not just date); jobs without a posted_date go after all dated jobs, in their original order. Over-cap jobs are not written to the sheet.
 10. For each surviving job → ATS jobs already have full JD text from the list call in step 2 (if an ATS job has no JD text, it is scored from title + location as `snippet`). Search-sourced jobs → fetch full JD via `jd_client.py` (plain HTTP fetch, browser User-Agent, strips script/style/noscript/svg/template). If the fetch fails, returns non-2xx, is not HTML, or has fewer than `jd_min_chars` (500) characters of visible text (common on JavaScript-heavy career sites), fall back to scoring from the search result's title + snippet instead.
 11. **Experience filter** (`experience_filter.py`, after JD fetch, before scoring): find the smallest required years of experience in the JD (or the title + snippet fallback). Text is cleaned first (HTML entities unescaped, tags stripped, whitespace collapsed). Counts only experience requirements: digits or one–ten, `N+`, `N-M` / `N to M` (→ N), "at least N", "minimum (of) N", tied to experience ("years of experience", "years' experience", "years in/with/of <skill>", degree + N years, or "experience" later in the same sentence; `N+` and ranges count on their own). Ignores unrelated years ("founded 10 years ago", "10 years in business", "5 year old"). Drop when required years > `experience_filter.max_years_required` (2). No requirement found → keep. Dropped jobs are not scored or written and count in `filtered`. The filter gets text only; service compares against the setting.
@@ -157,7 +157,7 @@ Scorer receives two inputs: `config/candidate.md` (one-page evidence doc) and `c
 
 ## US-Only Filtering (Two Layers)
 
-1. **Cheap location filter** (in code, after title filter, before cap): drops a job only if its location string contains a clearly non-US keyword. Keyword list lives in `settings.yaml` under `location_filter.exclude` — whole-word, case-insensitive matching. Jobs with US locations, "Remote", "Remote - US", or blank/unknown locations pass through.
+1. **Cheap location filter** (in code, after title filter, before cap): drops a job only if a checked field (ATS: location; search: title + raw URL, never the snippet) contains a clearly non-US keyword (`location_filter.exclude`) AND no checked field contains a US signal (`location_filter.us_signals`). Same whole-word, case-insensitive matcher for both lists. Jobs with US locations, "Remote", "Remote - US", mixed US + non-US locations, or blank/unknown locations pass through.
 2. **Scorer hard blocker**: a job based outside the US receives score 1–2 regardless of other fit signals.
 
 ## Error Handling
@@ -167,7 +167,8 @@ Scorer receives two inputs: `config/candidate.md` (one-page evidence doc) and `c
 - **No custom retry code.** Anthropic SDK handles its own retries. JD fetches, ATS calls and Serper calls: one request each with a timeout (`request_timeout_seconds` in `settings.yaml`).
 - **Fatal errors** → crash with non-zero exit code → GitHub Actions goes red → GitHub emails you:
   - sheet unreachable (read, append or title; HTTP errors become `RuntimeError` with the status)
-  - `SHEET_ID` / `SERPER_API_KEY` missing, invalid Anthropic key
+  - any of `SHEET_ID` / `SERPER_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_APPLICATION_CREDENTIALS` missing: `main.py` checks all four before doing any work and exits 1 with one error naming every missing variable
+  - invalid Anthropic key
   - every search query failed
   - every scoring attempt failed (nothing written)
 - **Single append at the end**: rows are written in one append after all scoring, so a crash mid-run writes nothing.
@@ -176,7 +177,7 @@ Scorer receives two inputs: `config/candidate.md` (one-page evidence doc) and `c
 ## Logging
 
 - **Storage**: console output only, kept by GitHub Actions in the run log (90-day default retention). No Runs/Errors tab, no log files, no artifacts.
-- **Never log** JD text, `profile.yaml` / `candidate.md` contents, or secrets. Failed-job lines show the URL + error type only (no exception message).
+- **Never log** JD text, `profile.yaml` / `candidate.md` contents, or secrets. Failed-job lines show the URL + error type + the exception message on one line, truncated to 150 characters.
 - **Fixed prefixes**: key lines start with a fixed uppercase prefix so a month of logs can be grepped: `RUN`, `ATS`, `QUERY`, `FUNNEL`, `DROP`, `JD`, `FAIL`, `SCORES`, `COST`.
 - **What each run logs**:
 
@@ -185,9 +186,9 @@ Scorer receives two inputs: `config/candidate.md` (one-page evidence doc) and `c
 | `RUN` (start) | After the existing `Writing to sheet: <title>` line: run start (configured tz), effective cap, `ats_lookback_days`, scoring model, existing URL count in the sheet |
 | `ATS` | Totals (companies polled, jobs within lookback); companies with 0 jobs; companies with errors (slug + HTTP status) |
 | `QUERY` | One line per query: pages fetched, results, new (after dedup), passed filters, new+passed from page 2+. Then one line with total Serper calls this run |
-| `FAIL` | Search errors (query + HTTP status); failed jobs (URL + error type) |
+| `FAIL` | Search errors (query + HTTP status); failed jobs (URL + error type + message truncated to 150 chars) |
 | `FUNNEL` | found, dupes (sheet), dupes (in-run), no URL, new, title dropped, location dropped, eligible, over cap, experience dropped |
-| `DROP` | One line per filtered job. Title drops: the matched exclude keyword, or `no include match`. Location drops: the matched keyword and where it matched (`location` / `title` / `snippet` / `url`). Experience drops: `DROP experience N \| <phrase> \| <title> \| <url>`. Over-cap jobs: `DROP cap` lines with titles, only when the over-cap count > 0 |
+| `DROP` | One line per filtered job. Title drops: the matched exclude keyword, or `no include match`. Location drops: the matched keyword and where it matched (`location` / `title` / `url`). Experience drops: `DROP experience N \| <phrase> \| <title> \| <url>`. Over-cap jobs: `DROP cap` lines with titles, only when the over-cap count > 0. Any `\|` inside a title is written as `/` so the ` \| ` separators stay parseable |
 | `JD` | Source counts: full fetched, snippet fallback, ATS full |
 | `SCORES` | Histogram: 8–10, 6–7.9, 3–5.9, 1–2.9 |
 | `COST` | Tokens: input, output, cache read, cache write; estimated cost from per-model prices in `settings.yaml` (never hardcoded) |

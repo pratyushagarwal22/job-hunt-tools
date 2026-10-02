@@ -8,7 +8,7 @@ import pytest
 from anthropic.types import Message
 
 from job_scanner import scoring_client
-from job_scanner.scoring_client import ScoreResult, score_job
+from job_scanner.scoring_client import ScoreResult, Usage, score_job
 
 FIXTURES = Path(__file__).parent / "fixtures"
 CANDIDATE_MD = "CANDIDATE-SENTINEL"
@@ -25,6 +25,12 @@ def _tool_input(raw: dict) -> dict:
 
 
 def _score(raw: dict | None = None, side_effect=None, **overrides):
+    """Returns (ScoreResult or raised exception, mocked messages.create)."""
+    result, create = _score_with_usage(raw, side_effect, **overrides)
+    return (result if isinstance(result, Exception) else result[0]), create
+
+
+def _score_with_usage(raw: dict | None = None, side_effect=None, **overrides):
     kwargs = dict(
         jd_text=JD,
         jd_source="full",
@@ -160,6 +166,27 @@ def test_system_prompt_cached():
     (block,) = create.call_args.kwargs["system"]
     assert block["type"] == "text"
     assert block["cache_control"] == {"type": "ephemeral"}
+
+
+def test_usage_returned_with_result():
+    raw = _fixture()
+    raw["usage"].update(
+        input_tokens=321, output_tokens=45, cache_creation_input_tokens=1234,
+        cache_read_input_tokens=5678,
+    )
+    (result, usage), _ = _score_with_usage(raw)
+
+    assert isinstance(result, ScoreResult)
+    assert usage == Usage(input=321, output=45, cache_read=5678, cache_write=1234)
+
+
+def test_usage_missing_cache_counters_are_zero():
+    raw = _fixture()
+    raw["usage"].update(cache_creation_input_tokens=None, cache_read_input_tokens=None)
+    (_, usage), _ = _score_with_usage(raw)
+
+    assert usage.cache_read == 0
+    assert usage.cache_write == 0
 
 
 def test_cache_tokens_logged(caplog):

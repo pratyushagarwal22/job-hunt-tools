@@ -256,10 +256,10 @@ pytest tests/test_ats_client.py -v
 - `normalize_url(url: str) -> str` — strip `utm_*`, `ref`, `source`, `gh_src`, `team`, `page`, `location`, `action`, fragments, trailing slashes, and a trailing `/apply` path segment. Lowercase scheme + domain. Keep path case. Do NOT strip `gh_jid` or `id` — they are job IDs on some career sites (e.g. company-hosted Greenhouse pages); stripping them would collapse different jobs into one URL and break dedup.
 
 `title_filter.py`:
-- `passes_title_filter(title: str, include: list[str], exclude: list[str]) -> bool` — case-insensitive, whole-word matching. Must match at least one include keyword and zero exclude keywords.
+- `title_drop_reason(title: str, include: list[str], exclude: list[str], always_allow: list[str] = ()) -> str | None` — case-insensitive, whole-word matching. Must match at least one include keyword and zero exclude keywords. Returns `None` (passes), the matched exclude keyword, or `"no include match"` (signature as of Task 8 + filter tuning). `always_allow` phrases (`title_filter.always_allow`, e.g. "Member of Technical Staff") count as an include match and are removed from the title before the exclude check ("Senior Member of Technical Staff" still drops on "Senior").
 
 `location_filter.py`:
-- `passes_location_filter(location: str | None, title: str, snippet: str, url: str, exclude_keywords: list[str], is_ats: bool) -> bool` — for ATS jobs, check `location` field only. For search jobs, check `title + snippet + url` (URL-decoded; catches locations in URLs, e.g. NVIDIA's `Taiwan-Taipei` path or Google's `?location=India`). The caller passes the **raw** URL, not the normalized one (normalization strips `?location=`). Blank/unknown/Remote passes.
+- `location_drop_reason(location: str | None, title: str, url: str, exclude_keywords: list[str], is_ats: bool, us_signals: list[str] = ()) -> tuple[str, str] | None` — for ATS jobs, check `location` field only. For search jobs, check title and url separately — not the snippet, which often mentions other offices or teams (URL-decoded; catches locations in URLs, e.g. NVIDIA's `Taiwan-Taipei` path or Google's `?location=India`). The caller passes the **raw** URL, not the normalized one (normalization strips `?location=`). Drops (returns `(keyword, where)`) only when an exclude keyword matches AND no `us_signals` entry (`location_filter.us_signals`: "United States", "USA", "U.S.", "Remote - US", "Remote (US)", "US Remote", state names except Georgia, major US tech cities; never bare "US" or state codes) appears in any checked field. Blank/unknown/Remote passes.
 - Both filters use the same whole-word matcher: `(?<!\w)…(?!\w)` lookarounds instead of `\b`, so keywords like `C++` or `AI/ML` match correctly.
 
 `date_utils.py`:
@@ -275,8 +275,8 @@ pytest tests/test_url_utils.py tests/test_title_filter.py tests/test_location_fi
 ```
 **Expected**: All tests pass. Test cases cover:
 - `url_utils`: utm stripping, ref / source / gh_src / team / page / location / action removal, trailing slash, trailing `/apply`, fragment removal, mixed case domain, idempotency. **Critical test**: two URLs differing only by `gh_jid` (or `id`) must stay different after normalization (e.g. `https://company.com/jobs?gh_jid=123` vs `https://company.com/jobs?gh_jid=456` → two distinct normalized URLs).
-- `title_filter`: exact match, partial non-match (e.g., "Lead" does not match "Leadership"), case insensitivity, exclude overrides include, no include match → fail.
-- `location_filter`: "London" → fail, "Remote" → pass, "New York, NY" → pass, blank → pass, "Bangalore, India" → fail, ATS mode checks only location field, search mode checks title+snippet+url (e.g. URL containing `Taiwan-Taipei` or `?location=India` → fail).
+- `title_filter`: exact match, partial non-match (e.g., "Lead" does not match "Leadership"), case insensitivity, exclude overrides include, no include match → fail. "Member of Technical Staff" → pass, "Senior Member of Technical Staff" → fail, "Java Developer" → pass, "Developer Advocate" → fail.
+- `location_filter`: "London" → fail, "Remote" → pass, "New York, NY" → pass, blank → pass, "Bangalore, India" → fail, ATS mode checks only location field, search mode checks title+url only (e.g. URL containing `Taiwan-Taipei` or `?location=India` → fail; a non-US place only in the snippet → pass). US signals: title "New York or Zurich" → pass, title "Zurich, Switzerland" → fail, title "join us in London" → fail, ATS "Toronto" → fail, ATS "San Francisco; London" → pass.
 - `date_utils`: all parsers return tz-aware datetimes (not bare dates) so Task 7 can sort on full datetime. "21 hours ago" at a 9:00 AM CT run → tz-aware datetime of the previous day at noon CT. "3 days ago" → 3 days before run_start. "1 week ago" → 7 days before. "just now" → run_start. Absolute date "Sep 28, 2026" → midnight CT on that date. Unparseable string → `None`. `parse_ats_date` with a UTC ISO string → CT datetime. `parse_ats_date` with a Unix ms int (Lever) → CT datetime. `format_posted_date` → `YYYY-MM-DD`.
 
 ---
@@ -448,6 +448,7 @@ python -m job_scanner.main --max-jobs 2
 
 **Files touched**:
 - `.github/workflows/scan.yaml` (new)
+- `job_scanner/main.py` (edit — fail fast on missing env vars)
 - `job_scanner/service.py` (edit — funnel / per-query / DROP / JD / SCORES / COST / RUN lines, step summary)
 - `job_scanner/title_filter.py` (edit — return the drop reason)
 - `job_scanner/location_filter.py` (edit — return the drop reason)
@@ -464,8 +465,9 @@ python -m job_scanner.main --max-jobs 2
 - **ATS**: totals (companies polled, jobs within lookback); list of companies with 0 jobs; list of companies with errors (slug + HTTP status, or error type for request/JSON failures). Today `ats_client` logs the warning and returns `[]` for both "no jobs" and "error", so service can't tell them apart: change ats_client to report the error to the caller, keeping "one company never crashes the run".
 - **QUERY**: per query: pages fetched, results, new (after dedup), passed filters, new+passed from page 2+ (tag each search job with its page number). Search errors as `FAIL search` lines (query name + HTTP status). One closing line with total Serper calls this run (every request sent).
 - **FUNNEL**: found, dupes (sheet), dupes (in-run), no URL, new, title dropped, location dropped, eligible, over cap, experience dropped. Numbers must add up (`found = dupes + no URL + new`, `new = title dropped + location dropped + eligible`, `eligible = over cap + experience dropped + scored + failed`). Experience drops already log `DROP experience N | <phrase> | <title> | <url>`; keep that format. `_dedup` must count sheet vs in-run dupes separately.
-- **DROP**: one line per filtered job with title + URL. Title drops: the matched exclude keyword, or `no include match`. Location drops: matched keyword + where it matched (`location` / `title` / `snippet` / `url`). `title_filter` and `location_filter` return the matched reason (`None` = passes) instead of a bool; update their tests to assert the reason. Over-cap: count in `FUNNEL`; `DROP cap` lines with titles only when the count > 0.
-- **FAIL (per job)**: URL + error type only. Today's scoring-failure warning also prints the exception message; drop it.
+- **DROP**: one line per filtered job with title + URL. Title drops: the matched exclude keyword, or `no include match`. Location drops: matched keyword + where it matched (`location` / `title` / `url`). A `|` inside a title is written as `/` in DROP lines. `title_filter` and `location_filter` return the matched reason (`None` = passes) instead of a bool; update their tests to assert the reason. Over-cap: count in `FUNNEL`; `DROP cap` lines with titles only when the count > 0.
+- **FAIL (per job)**: URL + error type + exception message, collapsed to one line and truncated to 150 characters.
+- **Missing env vars** (`job_scanner/main.py`): before any work, check `SHEET_ID`, `SERPER_API_KEY`, `ANTHROPIC_API_KEY` and `GOOGLE_APPLICATION_CREDENTIALS`; if any are unset or empty, log one error naming every missing variable and exit 1.
 - **JD**: counts of full fetched, snippet fallback (search fetch fallbacks + ATS jobs with empty JD text), ATS full.
 - **SCORES**: histogram buckets 8–10, 6–7.9, 3–5.9, 1–2.9.
 - **COST**: summed input, output, cache read, cache write tokens; estimated cost. `score_job` currently only logs usage per call, so it must also return it (e.g. alongside the `ScoreResult`). Prices per model (per million tokens: input, output, cache read, cache write) go in a new `settings.yaml` block keyed by model ID — never hardcoded. If the configured model has no price entry, log cost as unknown; never fail the run.
@@ -485,7 +487,7 @@ python -m job_scanner.main --max-jobs 2
 1. Cron: two schedule entries — `cron: '7 9 * * *'` and `cron: '7 21 * * *'`, each with `timezone: "America/Chicago"` (9:07 AM and 9:07 PM Chicago time, DST handled automatically; off the hour because top-of-hour scheduled runs are often delayed). **Verify the schedule `timezone` field against GitHub docs before relying on it (fallback: UTC cron, e.g. `7 14 * * *` / `7 2 * * *` for CDT, accepting a 1-hour DST shift).**
 2. `workflow_dispatch`: manual trigger with optional `max_jobs` input.
 3. `concurrency`: group `job-scanner` with `cancel-in-progress: false`. Prevents two runs (e.g. a cron trigger and a manual "Run workflow" click) from overlapping and both appending the same jobs to the real sheet. The second run queues until the first finishes.
-4. `timeout-minutes: 30` — prevents a hung run from burning Actions minutes indefinitely (cap 150 = up to 150 JD fetches + Haiku calls).
+4. `timeout-minutes: 45` — prevents a hung run from burning Actions minutes indefinitely (cap 150 = up to 150 JD fetches + scoring calls).
 5. Setup: checkout, Python 3.13, pip install.
 6. Decode secrets: write `GOOGLE_SERVICE_ACCOUNT_B64` → `service_account.json`, `PROFILE_YAML_B64` → `config/profile.yaml`, `CANDIDATE_MD_B64` → `config/candidate.md`.
 7. Set env vars: `SERPER_API_KEY`, `ANTHROPIC_API_KEY`, `SHEET_ID`, `GOOGLE_APPLICATION_CREDENTIALS=service_account.json`.
@@ -504,7 +506,7 @@ python -c "import yaml; yaml.safe_load(open('.github/workflows/scan.yaml'))"
 #    - Watch the run log
 # Expected: run completes green. Prod sheet gets new rows.
 #           Log starts with "Writing to sheet: Job Tracker" (the prod sheet title).
-# If secrets are missing, the run fails with a clear error about the missing env var.
+# If secrets are missing, the run fails with one clear error naming every missing env var.
 
 # 3. Concurrency check — trigger a second manual run while the first is still running.
 # Expected: second run queues (status "queued"), does NOT cancel the first.
