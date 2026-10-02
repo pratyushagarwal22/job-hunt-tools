@@ -33,6 +33,8 @@ title_filter:
     - "SWE"
     - "SDE"
     - "New Grad"
+    - "Early Career"
+    - "Early-Career"
     - "Forward Deployed"
     - "Founding Engineer"
     - "Product Engineer"
@@ -49,6 +51,8 @@ title_filter:
     - "Software Engineer I"
     - "SDE I"
   exclude:
+    - "Senior"
+    - "Sr"
     - "Staff"
     - "Principal"
     - "Lead"
@@ -63,6 +67,9 @@ title_filter:
     - "FPGA"
     - "Mainframe"
     - "COBOL"
+    - "RN"
+    - "Nurse"
+    - "Nursing"
 
 location_filter:
   # Drop a job only if its location contains one of these keywords.

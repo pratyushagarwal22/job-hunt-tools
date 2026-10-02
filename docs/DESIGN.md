@@ -190,6 +190,7 @@ Scorer receives two inputs: `config/candidate.md` (one-page evidence doc) and `c
 | No `remote` column | User is open to all work modes; included in location text |
 | Write "not found" email rows | Prevents re-spending Apollo credits on same person |
 | Score cap applied after dedup + title filter + location filter | Cap counts real US-based SWE candidates, not noise |
+| Senior/Sr excluded in title filter and queries | Oct 2026 sheet review: mostly wasted scoring |
 | Newest jobs scored first | If capped, better to score fresh postings |
 | US-only: two-layer filtering | Cheap keyword filter catches obvious non-US before burning scorer credits; scorer catches the rest |
 | Location within the US is never a penalty | Candidate is open to anywhere in the US; only Greater Seattle gets a small bonus |

@@ -1,4 +1,11 @@
+from pathlib import Path
+
+import pytest
+import yaml
+
 from job_scanner.title_filter import passes_title_filter
+
+SETTINGS = Path(__file__).parent.parent / "job_scanner" / "settings.yaml"
 
 INCLUDE = ["Software Engineer", "SWE", "New Grad", "C++", "AI/ML", "SDE I"]
 EXCLUDE = ["Staff", "Lead", "Intern", "Head of"]
@@ -80,3 +87,37 @@ def test_empty_title_fails():
 
 def test_empty_include_list_fails():
     assert not passes_title_filter("Software Engineer", [], EXCLUDE)
+
+
+def _settings_lists():
+    settings = yaml.safe_load(SETTINGS.read_text())["title_filter"]
+    return settings["include"], settings["exclude"]
+
+
+@pytest.mark.parametrize("title", [
+    "Senior Software Engineer",
+    "Sr. Software Engineer II",
+    "Sr Software Engineer, Backend",
+    "New Grad RN - Home Infusion",
+    "Nurse Software Engineer",
+    "Nursing Informatics Software Developer",
+])
+def test_settings_exclude_senior_and_nursing(title):
+    include, exclude = _settings_lists()
+    assert not passes_title_filter(title, include, exclude)
+
+
+@pytest.mark.parametrize("title", [
+    "Software Engineer, SRE",
+    "Software Engineer, New Grad",
+    "Backend Software Engineer (Surgical Robotics)",
+])
+def test_settings_keep_early_career_titles(title):
+    include, exclude = _settings_lists()
+    assert passes_title_filter(title, include, exclude)
+
+
+def test_settings_exclude_has_no_duplicates():
+    _, exclude = _settings_lists()
+    lowered = [k.lower() for k in exclude]
+    assert len(lowered) == len(set(lowered))
