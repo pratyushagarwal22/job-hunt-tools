@@ -12,6 +12,9 @@ docs/PROJECT_CONTEXT.md
 # Old inputs, never commit
 _legacy/
 
+# One-off experiments
+_scratch/
+
 # Python
 __pycache__/
 *.pyc

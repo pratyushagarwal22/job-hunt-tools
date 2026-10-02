@@ -19,9 +19,35 @@ jd_min_chars: 500
 timezone: America/Chicago
 
 scoring:
-  model: claude-haiku-4-5-20251001
+  model: claude-opus-5-5
+  # true: forced tool call (Haiku). false: tool_choice auto + strict tool, for models that
+  # reject a forced tool_choice (Sonnet/Opus 5.5).
+  force_tool_choice: false
   max_tokens: 2048
   max_jd_chars: 15000
+
+# USD per million tokens, keyed by model ID. Stored only; COST logging comes in Task 8.
+prices:
+  claude-haiku-4-5-20251001:
+    input: 1.00
+    output: 5.00
+    cache_write: 1.25
+    cache_read: 0.10
+  claude-sonnet-5-5:
+    input: 2.00
+    output: 10.00
+    cache_write: 2.50
+    cache_read: 0.20
+  claude-opus-5-5:
+    input: 4.00
+    output: 20.00
+    cache_write: 5.00
+    cache_read: 0.20
+
+experience_filter:
+  # Drop a job before scoring when its JD (or title + snippet) requires more years than this.
+  # No stated requirement → keep.
+  max_years_required: 2
 
 title_filter:
   # At least one include keyword must match AND zero exclude keywords must match.
@@ -76,7 +102,7 @@ location_filter:
   # Matching is case-insensitive and whole-word.
   # Jobs with US locations, "Remote", "Remote - US", or blank/unknown pass through.
   # Names shared with a US place that posts real software jobs are only matched in
-  # narrowed forms: Mexico (New Mexico), Dublin (Dublin CA/OH), Vancouver (Vancouver WA).
+  # narrowed forms: Mexico (New Mexico), Vancouver (Vancouver WA).
   # No bare "Ontario" (Ontario CA) or "England" (New England).
   exclude:
     # Regions

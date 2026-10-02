@@ -328,7 +328,7 @@ pytest tests/test_jd_client.py -v
 
 **Files touched**:
 - `job_scanner/scoring_client.py` (new)
-- `job_scanner/settings.yaml` (edit — add `scoring.model`, `scoring.max_tokens`, `scoring.max_jd_chars` keys)
+- `job_scanner/settings.yaml` (edit — add `scoring.model`, `scoring.force_tool_choice`, `scoring.max_tokens`, `scoring.max_jd_chars` keys, and the `prices` block per model)
 - `tests/test_scoring_client.py` (new)
 - `tests/fixtures/haiku_score_response.json` (new, scrubbed)
 
@@ -347,8 +347,8 @@ ScoreResult:
 ```
 
 **What scoring_client.py exposes**:
-- `score_job(jd_text: str, jd_source: str, candidate_md: str, profile_yaml: str, model: str, max_tokens: int, max_jd_chars: int, title_hint: str = "", company_hint: str = "") -> ScoreResult` — one Haiku call, forced tool call (`tool_choice` = the scoring tool), validated with pydantic. JD truncated to `max_jd_chars`. `title_hint` / `company_hint` passed for ATS jobs so Haiku doesn't need to extract them. Snippet inputs get an extra note in the user message.
-- `model`, `max_tokens`, `max_jd_chars` come from `settings.yaml` `scoring` block, passed in by service.py (the client never reads settings.yaml). Add these keys in this task.
+- `score_job(jd_text: str, jd_source: str, candidate_md: str, profile_yaml: str, model: str, max_tokens: int, max_jd_chars: int, force_tool_choice: bool, title_hint: str = "", company_hint: str = "") -> ScoreResult` — one Claude call to the scoring tool, validated with pydantic. `force_tool_choice=True`: forced tool call (Haiku). `False`: `tool_choice: auto`, `strict: true` on the tool, and "Always respond by calling the scoring tool." appended to the user message (Sonnet/Opus 5.5 reject forced tool_choice); no tool call → failed job. One tool schema for all models: `additionalProperties: false`, no `minimum`/`maximum` (pydantic still enforces 1.0–10.0). Scoring model for October: `claude-opus-5-5`. JD truncated to `max_jd_chars`. `title_hint` / `company_hint` passed for ATS jobs so Haiku doesn't need to extract them. Snippet inputs get an extra note in the user message.
+- `model`, `force_tool_choice`, `max_tokens`, `max_jd_chars` come from `settings.yaml` `scoring` block, passed in by service.py (the client never reads settings.yaml). Add these keys in this task.
 - **Prompt caching**: the system block (generic rules + calibration + `candidate.md` + `profile.yaml`, ~4,600 tokens) has `cache_control: ephemeral`. Haiku 4.5's cache minimum is 4,096 tokens. Each call logs input / output / cache-creation / cache-read tokens; a warning is logged when both cache counters are 0.
 - **Calibration section** in the prompt: bands (9–10, 7–8, 6, 3–5, 1–2), how to apply them, one example per band, snippet-only rules. Generic only — personal rules (F-1 OPT, Seattle bonus) live in `profile.yaml`; profile wins on conflict.
 
@@ -363,7 +363,8 @@ jd = '''[paste a short JD or use a known one]'''
 candidate = open('config/candidate.md').read()
 profile = open('config/profile.yaml').read()
 result = score_job(jd, 'full', candidate, profile,
-                   model='claude-haiku-4-5-20251001', max_tokens=2048, max_jd_chars=15000)
+                   model='claude-opus-5-5', max_tokens=2048, max_jd_chars=15000,
+                   force_tool_choice=False)
 print(result)
 "
 # Expected: ScoreResult with match_score between 1.0 and 10.0, all fields populated.
@@ -462,7 +463,7 @@ python -m job_scanner.main --max-jobs 2
 - **Header (`RUN`)**: run start (configured tz), effective cap (after `--max-jobs`), `ats_lookback_days`, `scoring.model`, existing URL count from the sheet.
 - **ATS**: totals (companies polled, jobs within lookback); list of companies with 0 jobs; list of companies with errors (slug + HTTP status, or error type for request/JSON failures). Today `ats_client` logs the warning and returns `[]` for both "no jobs" and "error", so service can't tell them apart: change ats_client to report the error to the caller, keeping "one company never crashes the run".
 - **QUERY**: per query: pages fetched, results, new (after dedup), passed filters, new+passed from page 2+ (tag each search job with its page number). Search errors as `FAIL search` lines (query name + HTTP status). One closing line with total Serper calls this run (every request sent).
-- **FUNNEL**: found, dupes (sheet), dupes (in-run), no URL, new, title dropped, location dropped, eligible, over cap. Numbers must add up (`found = dupes + no URL + new`, `new = title dropped + location dropped + eligible`). `_dedup` must count sheet vs in-run dupes separately.
+- **FUNNEL**: found, dupes (sheet), dupes (in-run), no URL, new, title dropped, location dropped, eligible, over cap, experience dropped. Numbers must add up (`found = dupes + no URL + new`, `new = title dropped + location dropped + eligible`, `eligible = over cap + experience dropped + scored + failed`). Experience drops already log `DROP experience N | <phrase> | <title> | <url>`; keep that format. `_dedup` must count sheet vs in-run dupes separately.
 - **DROP**: one line per filtered job with title + URL. Title drops: the matched exclude keyword, or `no include match`. Location drops: matched keyword + where it matched (`location` / `title` / `snippet` / `url`). `title_filter` and `location_filter` return the matched reason (`None` = passes) instead of a bool; update their tests to assert the reason. Over-cap: count in `FUNNEL`; `DROP cap` lines with titles only when the count > 0.
 - **FAIL (per job)**: URL + error type only. Today's scoring-failure warning also prints the exception message; drop it.
 - **JD**: counts of full fetched, snippet fallback (search fetch fallbacks + ATS jobs with empty JD text), ATS full.

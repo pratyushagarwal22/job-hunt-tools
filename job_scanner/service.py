@@ -13,6 +13,7 @@ import yaml
 from job_scanner import (
     ats_client,
     date_utils,
+    experience_filter,
     jd_client,
     scoring_client,
     search_client,
@@ -80,11 +81,18 @@ def run_pipeline(max_jobs: int | None) -> dict:
     )
 
     date_found = date_utils.format_date_found(run_start, tz_name)
+    max_years = settings["experience_filter"]["max_years_required"]
     rows = []
     failed = 0
     for job in to_score:
         try:
-            rows.append(_score_to_row(job, config, settings, date_found))
+            jd_text, jd_source = _get_jd(job, settings)
+            years, phrase = experience_filter.required_years(jd_text)
+            if years is not None and years > max_years:
+                filtered += 1
+                logger.info("DROP experience %d | %s | %s | %s", years, phrase, job["title"], job["url"])
+                continue
+            rows.append(_score_to_row(job, jd_text, jd_source, config, settings, date_found))
         except (anthropic.AuthenticationError, anthropic.PermissionDeniedError):
             raise
         except Exception as exc:
@@ -228,21 +236,27 @@ def _newest_first(jobs: list[dict]) -> list[dict]:
     return sorted(dated, key=lambda job: job["posted"], reverse=True) + undated
 
 
-def _score_to_row(job: dict, config: dict, settings: dict, date_found: str) -> list:
+def _get_jd(job: dict, settings: dict) -> tuple[str, str]:
+    """Full JD when available, else title + snippet (search) or title + location (ATS)."""
+    if job["is_ats"]:
+        if job["jd_text"]:
+            return job["jd_text"], "full"
+        return f"{job['title']}\n{job['location']}", "snippet"
+    jd_text, jd_source = jd_client.fetch_jd(
+        job["url"], settings["request_timeout_seconds"], settings["jd_min_chars"]
+    )
+    if jd_source != "full" or not jd_text:
+        return f"{job['title']}\n{job['snippet']}", "snippet"
+    return jd_text, jd_source
+
+
+def _score_to_row(
+    job: dict, jd_text: str, jd_source: str, config: dict, settings: dict, date_found: str
+) -> list:
     scoring = settings["scoring"]
     hints = {}
     if job["is_ats"]:
         hints = dict(title_hint=job["title"], company_hint=job["company"])
-        if job["jd_text"]:
-            jd_text, jd_source = job["jd_text"], "full"
-        else:
-            jd_text, jd_source = f"{job['title']}\n{job['location']}", "snippet"
-    else:
-        jd_text, jd_source = jd_client.fetch_jd(
-            job["url"], settings["request_timeout_seconds"], settings["jd_min_chars"]
-        )
-        if jd_source != "full" or not jd_text:
-            jd_text, jd_source = f"{job['title']}\n{job['snippet']}", "snippet"
 
     result = scoring_client.score_job(
         jd_text=jd_text,
@@ -252,6 +266,7 @@ def _score_to_row(job: dict, config: dict, settings: dict, date_found: str) -> l
         model=scoring["model"],
         max_tokens=scoring["max_tokens"],
         max_jd_chars=scoring["max_jd_chars"],
+        force_tool_choice=scoring["force_tool_choice"],
         **hints,
     )
 

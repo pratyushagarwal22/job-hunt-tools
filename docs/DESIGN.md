@@ -85,10 +85,11 @@ job-hunt-tools/
 8. Location filter: drop jobs whose location is clearly outside the US (non-US keyword list in `settings.yaml`). For ATS jobs, check the location field. For search results (no structured location field), check the title + snippet text and the **raw** (pre-normalization, URL-decoded) URL — normalization strips params like `?location=` that the filter needs (catches locations in URLs, e.g. NVIDIA's `Taiwan-Taipei` or Google's `?location=India`). Keep US locations, "Remote", "Remote - US", and blank/unknown.
 9. Apply score cap (`max_jobs_per_run`, default 150, overridable via `--max-jobs`). Newest jobs first — sort on the full datetime (not just date); jobs without a posted_date go after all dated jobs, in their original order. Over-cap jobs are not written to the sheet.
 10. For each surviving job → ATS jobs already have full JD text from the list call in step 2 (if an ATS job has no JD text, it is scored from title + location as `snippet`). Search-sourced jobs → fetch full JD via `jd_client.py` (plain HTTP fetch, browser User-Agent, strips script/style/noscript/svg/template). If the fetch fails, returns non-2xx, is not HTML, or has fewer than `jd_min_chars` (500) characters of visible text (common on JavaScript-heavy career sites), fall back to scoring from the search result's title + snippet instead.
-11. For each JD (or snippet fallback) → one Haiku call (`scoring.model`, `scoring.max_tokens`; JD truncated to `scoring.max_jd_chars`) with `config/candidate.md` + `config/profile.yaml` context in a cached system prompt → forced tool call returning structured JSON
-12. Validate Haiku's JSON response with a pydantic schema. Invalid response = failed job (skip, not written to sheet).
-13. Append all scored rows to "Jobs" tab in **one append at the end of the run** (append-only, never overwrite)
-14. Print summary: `"found 42, new 12, filtered 3, scored 8, failed 1, skipped (cap): 0"`. `new` = after dedup, before filters; `filtered` = dropped by the title or location filter.
+11. **Experience filter** (`experience_filter.py`, after JD fetch, before scoring): find the smallest required years of experience in the JD (or the title + snippet fallback). Text is cleaned first (HTML entities unescaped, tags stripped, whitespace collapsed). Counts only experience requirements: digits or one–ten, `N+`, `N-M` / `N to M` (→ N), "at least N", "minimum (of) N", tied to experience ("years of experience", "years' experience", "years in/with/of <skill>", degree + N years, or "experience" later in the same sentence; `N+` and ranges count on their own). Ignores unrelated years ("founded 10 years ago", "10 years in business", "5 year old"). Drop when required years > `experience_filter.max_years_required` (2). No requirement found → keep. Dropped jobs are not scored or written and count in `filtered`. The filter gets text only; service compares against the setting.
+12. For each remaining JD (or snippet fallback) → one Claude call (`scoring.model`, `scoring.max_tokens`; JD truncated to `scoring.max_jd_chars`) with `config/candidate.md` + `config/profile.yaml` context in a cached system prompt → scoring tool call returning structured JSON (forced or auto per `scoring.force_tool_choice`, see Scoring Rules)
+13. Validate the model's tool input with a pydantic schema. Invalid response = failed job (skip, not written to sheet).
+14. Append all scored rows to "Jobs" tab in **one append at the end of the run** (append-only, never overwrite)
+15. Print summary: `"found 42, new 12, filtered 3, scored 8, failed 1, skipped (cap): 0"`. `new` = after dedup, before filters; `filtered` = dropped by the title, location or experience filter.
 
 ### title and company fields
 
@@ -149,7 +150,10 @@ Scorer receives two inputs: `config/candidate.md` (one-page evidence doc) and `c
   - **Exception (3–5)**: the role's core is a specialty with no evidence in the candidate's background (e.g. embedded firmware, chip design), or the work is mostly outside general software engineering (e.g. QA-only, IT support, sales engineering).
 - **Personal rules live in `profile.yaml`**, not the prompt. The system prompt holds only generic rules (hard blockers, US location never a penalty, facts-only) plus a generic **score calibration** section: bands 9–10 / 7–8 / 6 / 3–5 / 1–2, how to apply them, one example job per band, and snippet-only rules. Personal specifics (F-1 OPT, the Seattle bonus) come from `profile.yaml`; on conflict, profile rules win.
 - **Prompt caching**: the system block (prompt + `candidate.md` + `profile.yaml`, ~4,600 tokens) is marked `cache_control: ephemeral`. Haiku 4.5's minimum cacheable prompt is 4,096 tokens, so the calibration section is padded with useful content, not filler. If both cache counters come back 0, the scorer logs a warning (prompt likely fell below the minimum).
-- **Pydantic validation**: Haiku's response is a forced tool call validated against a pydantic schema (`match_score` 1.0–10.0, rounded to one decimal). Invalid response = failed job (skipped, not written to sheet, retried next run).
+- **Scoring model**: `scoring.model` in `settings.yaml`. **October 2026: Claude Opus (`claude-opus-5-5`)**; Haiku 4.5 and Sonnet 5.5 also work. Per-model prices (input, output, cache write, cache read per million tokens) live in the `prices` block.
+- **Tool call mode** (`scoring.force_tool_choice`, passed in by service): `true` → forced tool call (`tool_choice` = the scoring tool; Haiku). `false` → `tool_choice: auto`, `strict: true` on the tool, and "Always respond by calling the scoring tool." appended to the user message (Sonnet/Opus 5.5 reject a forced `tool_choice`). A response with no tool call = failed job.
+- **One tool schema for all models**: generated from the pydantic model with `additionalProperties: false` and no `minimum`/`maximum` (strict tools reject them).
+- **Pydantic validation**: the tool input is validated against the pydantic schema (`match_score` 1.0–10.0, rounded to one decimal). Invalid response = failed job (skipped, not written to sheet, retried next run).
 
 ## US-Only Filtering (Two Layers)
 
@@ -182,8 +186,8 @@ Scorer receives two inputs: `config/candidate.md` (one-page evidence doc) and `c
 | `ATS` | Totals (companies polled, jobs within lookback); companies with 0 jobs; companies with errors (slug + HTTP status) |
 | `QUERY` | One line per query: pages fetched, results, new (after dedup), passed filters, new+passed from page 2+. Then one line with total Serper calls this run |
 | `FAIL` | Search errors (query + HTTP status); failed jobs (URL + error type) |
-| `FUNNEL` | found, dupes (sheet), dupes (in-run), no URL, new, title dropped, location dropped, eligible, over cap |
-| `DROP` | One line per filtered job. Title drops: the matched exclude keyword, or `no include match`. Location drops: the matched keyword and where it matched (`location` / `title` / `snippet` / `url`). Over-cap jobs: `DROP cap` lines with titles, only when the over-cap count > 0 |
+| `FUNNEL` | found, dupes (sheet), dupes (in-run), no URL, new, title dropped, location dropped, eligible, over cap, experience dropped |
+| `DROP` | One line per filtered job. Title drops: the matched exclude keyword, or `no include match`. Location drops: the matched keyword and where it matched (`location` / `title` / `snippet` / `url`). Experience drops: `DROP experience N \| <phrase> \| <title> \| <url>`. Over-cap jobs: `DROP cap` lines with titles, only when the over-cap count > 0 |
 | `JD` | Source counts: full fetched, snippet fallback, ATS full |
 | `SCORES` | Histogram: 8–10, 6–7.9, 3–5.9, 1–2.9 |
 | `COST` | Tokens: input, output, cache read, cache write; estimated cost from per-model prices in `settings.yaml` (never hardcoded) |
@@ -228,7 +232,8 @@ Scorer receives two inputs: `config/candidate.md` (one-page evidence doc) and `c
 | Logs: console only, no new storage | GitHub keeps run logs 90 days; a Runs/Errors tab is out of scope for v1 |
 | `ats_client.py` separate from `jd_client.py` | One client per external system: ats_client handles Greenhouse/Lever/Ashby APIs (list call returns jobs with JD text, one call per company); jd_client handles plain HTTP fetches for search-sourced job pages |
 | title/company from source when available | ATS APIs return structured data; Haiku extraction only needed for search results |
-| Pydantic validation on scorer output | Catches malformed Haiku responses before they hit the sheet |
+| Pydantic validation on scorer output | Catches malformed model responses before they hit the sheet |
+| Scoring model is a setting; tool mode is a setting (`force_tool_choice`) | Sonnet/Opus 5.5 reject a forced `tool_choice`; one code path supports both. Opus for October |
 | `config/` at repo root, gitignored | Personal files (profile.yaml, candidate.md) stay out of repo; .example versions document format |
 | `settings.yaml` committed | Caps, filter keywords, and lookback days are config, not secrets |
 | Append-only sheet writes | User's checkboxes and manual edits must survive every run |
@@ -258,5 +263,5 @@ Scorer receives two inputs: `config/candidate.md` (one-page evidence doc) and `c
 - **Apollo credit burn**: each people/match call costs credits. No cap is built into email_finder (it's manual and one-at-a-time, so you're the cap).
 - **Sheet row limits**: Google Sheets caps at ~10M cells. Not a near-term risk, but if you never clean up, the sheet grows forever.
 - **Snippet-based scores are less reliable**: when the full JD can't be fetched, scoring from title + snippet may miss requirements or benefits. The `jd_source` column lets you see which scores are snippet-based.
-- **Haiku output consistency**: structured JSON mode + pydantic validation catches malformed responses. Invalid responses are skipped and retried next run.
+- **Scorer output consistency**: tool call (forced, or strict + auto) + pydantic validation catches malformed responses. In auto mode the model could skip the tool; that response counts as a failed job. Invalid responses are skipped and retried next run.
 - **Checkbox column append behavior**: if the whole `applied` / `contacted` column is pre-filled with checkboxes (e.g. via Google Sheets data validation on 1000 rows), those cells may be treated as containing FALSE. The append API would then add new rows after the last "filled" row (e.g. row 1001) instead of after the last data row (e.g. row 2). **Resolved in Task 1**: confirmed — with checkboxes pre-filled on rows 2–1000, the append landed on row 1001. Decision: code writes "" (blank) to `applied` / `contacted`, checkboxes are never pre-filled on empty rows, and marking is manual.

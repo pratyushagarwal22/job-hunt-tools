@@ -1,4 +1,8 @@
-"""Score one job against the candidate with a single Anthropic call (forced tool use)."""
+"""Score one job against the candidate with a single Anthropic call to a scoring tool.
+
+force_tool_choice=True forces the tool call; False uses tool_choice auto with a strict tool
+(for models that reject a forced tool_choice). A response without the tool call is an error.
+"""
 
 import logging
 
@@ -37,6 +41,20 @@ class ScoreResult(BaseModel):
             return round(value, 1)
         return value
 
+
+def _tool_schema() -> dict:
+    # Strict tools need additionalProperties=false and reject numeric minimum/maximum;
+    # the 1.0-10.0 range is enforced by ScoreResult validation instead.
+    schema = ScoreResult.model_json_schema()
+    schema["additionalProperties"] = False
+    for prop in schema.get("properties", {}).values():
+        prop.pop("minimum", None)
+        prop.pop("maximum", None)
+    return schema
+
+
+TOOL_SCHEMA = _tool_schema()
+TOOL_INSTRUCTION = "Always respond by calling the scoring tool."
 
 SYSTEM_PROMPT = """\
 You score how well one job posting fits one candidate. Record your answer by calling the \
@@ -139,11 +157,24 @@ def score_job(
     model: str,
     max_tokens: int,
     max_jd_chars: int,
+    force_tool_choice: bool,
     title_hint: str = "",
     company_hint: str = "",
 ) -> ScoreResult:
+    """force_tool_choice=False is for models that reject a forced tool_choice (Sonnet/Opus 5.5)."""
     truncated = len(jd_text) > max_jd_chars
     jd_text = jd_text[:max_jd_chars]
+
+    tool = {
+        "name": _TOOL_NAME,
+        "description": "Record the job's fit score and extracted fields.",
+        "input_schema": TOOL_SCHEMA,
+    }
+    if force_tool_choice:
+        tool_choice = {"type": "tool", "name": _TOOL_NAME}
+    else:
+        tool["strict"] = True
+        tool_choice = {"type": "auto"}
 
     response = anthropic.Anthropic().messages.create(
         model=model,
@@ -160,17 +191,13 @@ def score_job(
         messages=[
             {
                 "role": "user",
-                "content": _user_message(jd_text, jd_source, title_hint, company_hint),
+                "content": _user_message(
+                    jd_text, jd_source, title_hint, company_hint, force_tool_choice
+                ),
             }
         ],
-        tools=[
-            {
-                "name": _TOOL_NAME,
-                "description": "Record the job's fit score and extracted fields.",
-                "input_schema": ScoreResult.model_json_schema(),
-            }
-        ],
-        tool_choice={"type": "tool", "name": _TOOL_NAME},
+        tools=[tool],
+        tool_choice=tool_choice,
     )
     usage = response.usage
     cache_creation = usage.cache_creation_input_tokens or 0
@@ -212,7 +239,9 @@ def score_job(
         raise ValueError(f"Invalid score result: {problems}") from None
 
 
-def _user_message(jd_text: str, jd_source: str, title_hint: str, company_hint: str) -> str:
+def _user_message(
+    jd_text: str, jd_source: str, title_hint: str, company_hint: str, force_tool_choice: bool
+) -> str:
     parts = []
     if jd_source == "snippet":
         parts.append(SNIPPET_NOTE)
@@ -221,4 +250,6 @@ def _user_message(jd_text: str, jd_source: str, title_hint: str, company_hint: s
     if company_hint:
         parts.append(f"Known company (use as-is): {company_hint}")
     parts.append(f"<job_posting>\n{jd_text}\n</job_posting>")
+    if not force_tool_choice:
+        parts.append(TOOL_INSTRUCTION)
     return "\n\n".join(parts)

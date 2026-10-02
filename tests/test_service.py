@@ -22,7 +22,8 @@ def _settings(**overrides) -> dict:
         request_timeout_seconds=7,
         jd_min_chars=321,
         timezone=TZ,
-        scoring=dict(model="test-model", max_tokens=111, max_jd_chars=2222),
+        scoring=dict(model="test-model", max_tokens=111, max_jd_chars=2222, force_tool_choice=False),
+        experience_filter=dict(max_years_required=2),
         title_filter=dict(include=["Software Engineer"], exclude=["Senior"]),
         location_filter=dict(exclude=["London", "India", "Bangalore"]),
     )
@@ -382,11 +383,59 @@ def test_scoring_settings_and_hints_passed(monkeypatch):
         assert call["max_jd_chars"] == 2222
         assert call["candidate_md"] == "CANDIDATE"
         assert call["profile_yaml"] == "PROFILE"
+        assert call["force_tool_choice"] is False
     assert ats_call["title_hint"] == "Software Engineer"
     assert ats_call["company_hint"] == "Acme"
     assert ats_call["jd_text"] == "Full ATS JD"
     assert not search_call.get("title_hint")
     assert not search_call.get("company_hint")
+
+
+def test_experience_filter_threshold_drops_before_scoring(monkeypatch, caplog):
+    h = Harness(
+        monkeypatch,
+        search_pages={QUERY_A: [[
+            _search_result("https://s.example.com/two"),
+            _search_result("https://s.example.com/snip", snippet="Requires 5+ years of experience."),
+            _search_result("https://s.example.com/none"),
+        ]]},
+        ats_jobs={"acme": [
+            _ats_job("https://a.example.com/three", jd_text="3+ years of experience with Go."),
+        ]},
+        jd={
+            "https://s.example.com/two": ("You have 2 years of experience. " * 30, "full"),
+            "https://s.example.com/snip": (None, "snippet"),
+        },
+    )
+
+    with caplog.at_level("INFO", logger="job_scanner"):
+        summary = service.run_pipeline(None)
+
+    assert sorted(h.urls()) == ["https://s.example.com/none", "https://s.example.com/two"]
+    assert len(h.score_calls) == 2
+    assert all("3+ years" not in c["jd_text"] and "5+ years" not in c["jd_text"]
+               for c in h.score_calls)
+    assert summary["filtered"] == 2
+    assert summary["scored"] == 2
+    drops = [r.getMessage() for r in caplog.records if r.getMessage().startswith("DROP experience")]
+    assert sorted(drops) == [
+        "DROP experience 3 | 3+ years of experience | Software Engineer | https://a.example.com/three",
+        "DROP experience 5 | 5+ years of experience | Software Engineer | https://s.example.com/snip",
+    ]
+
+
+def test_experience_threshold_read_from_settings(monkeypatch):
+    h = Harness(
+        monkeypatch,
+        settings=_settings(experience_filter=dict(max_years_required=3)),
+        queries=[],
+        ats_jobs={"acme": [_ats_job("https://a.example.com/three", jd_text="3+ years of experience.")]},
+    )
+
+    summary = service.run_pipeline(None)
+
+    assert h.urls() == ["https://a.example.com/three"]
+    assert summary["filtered"] == 0
 
 
 def test_pagination_stops_early_on_empty_page(monkeypatch):

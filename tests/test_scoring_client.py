@@ -33,6 +33,7 @@ def _score(raw: dict | None = None, side_effect=None, **overrides):
         model="claude-haiku-4-5-20251001",
         max_tokens=1024,
         max_jd_chars=15000,
+        force_tool_choice=True,
     )
     kwargs.update(overrides)
     response = Message.model_validate(raw if raw is not None else _fixture())
@@ -73,7 +74,48 @@ def test_single_call_with_forced_tool_and_settings():
     assert kwargs["max_tokens"] == 1024
     (tool,) = kwargs["tools"]
     assert kwargs["tool_choice"] == {"type": "tool", "name": tool["name"]}
-    assert tool["input_schema"] == ScoreResult.model_json_schema()
+    assert tool["input_schema"] == scoring_client.TOOL_SCHEMA
+    assert "strict" not in tool
+    assert scoring_client.TOOL_INSTRUCTION not in kwargs["messages"][0]["content"]
+
+
+def test_auto_mode_uses_strict_tool_and_instruction():
+    _, create = _score(force_tool_choice=False)
+
+    kwargs = create.call_args.kwargs
+    (tool,) = kwargs["tools"]
+    assert kwargs["tool_choice"] == {"type": "auto"}
+    assert tool["strict"] is True
+    assert tool["input_schema"] == scoring_client.TOOL_SCHEMA
+    content = kwargs["messages"][0]["content"]
+    assert content.endswith(scoring_client.TOOL_INSTRUCTION)
+    assert scoring_client.TOOL_INSTRUCTION == "Always respond by calling the scoring tool."
+
+
+def test_both_modes_send_same_system_prompt_and_posting():
+    _, forced = _score(force_tool_choice=True)
+    _, auto = _score(force_tool_choice=False)
+
+    assert forced.call_args.kwargs["system"] == auto.call_args.kwargs["system"]
+    forced_content = forced.call_args.kwargs["messages"][0]["content"]
+    auto_content = auto.call_args.kwargs["messages"][0]["content"]
+    assert auto_content == f"{forced_content}\n\n{scoring_client.TOOL_INSTRUCTION}"
+
+
+def test_auto_mode_result_validated():
+    result, _ = _score(force_tool_choice=False)
+
+    assert isinstance(result, ScoreResult)
+    assert result.reason == _tool_input(_fixture())["reason"]
+
+
+def test_tool_schema_is_strict_compatible():
+    schema = scoring_client.TOOL_SCHEMA
+
+    assert schema["additionalProperties"] is False
+    assert set(schema["required"]) == set(ScoreResult.model_fields)
+    for prop in schema["properties"].values():
+        assert "minimum" not in prop and "maximum" not in prop
 
 
 def test_candidate_and_profile_in_system_prompt():
@@ -169,9 +211,10 @@ def test_score_rounded_to_one_decimal(score):
     assert result.match_score == round(score, 1)
 
 
+@pytest.mark.parametrize("force_tool_choice", [True, False])
 @pytest.mark.parametrize("score", [0.9, 10.5, -3, 11])
-def test_score_out_of_range_raises(score):
-    result, _ = _score(_with_input(match_score=score))
+def test_score_out_of_range_raises(score, force_tool_choice):
+    result, _ = _score(_with_input(match_score=score), force_tool_choice=force_tool_choice)
 
     assert isinstance(result, ValueError)
     assert "match_score" in str(result)
@@ -193,11 +236,12 @@ def test_validation_error_does_not_echo_model_output():
     assert "SECRET-VALUE" not in str(result)
 
 
-def test_missing_tool_call_raises():
+@pytest.mark.parametrize("force_tool_choice", [True, False])
+def test_missing_tool_call_raises(force_tool_choice):
     raw = _fixture()
     raw["content"] = [{"type": "text", "text": "I think this is a 7."}]
     raw["stop_reason"] = "end_turn"
-    result, _ = _score(raw)
+    result, _ = _score(raw, force_tool_choice=force_tool_choice)
 
     assert isinstance(result, ValueError)
     assert "end_turn" in str(result)
