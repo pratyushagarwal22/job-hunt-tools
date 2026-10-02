@@ -1,16 +1,16 @@
 # Pipeline settings — committed to repo.
 # Personal data belongs in config/profile.yaml (gitignored).
 
-max_jobs_per_run: 50
+max_jobs_per_run: 150
 
-max_pages_per_query: 2
+max_pages_per_query: 4
 
 search:
   tbs: "qdr:d"  # past 24 hours
   gl: us        # search origin, not a job-location filter
   num: 10       # results per page
 
-ats_lookback_days: 3
+ats_lookback_days: 2
 
 request_timeout_seconds: 15
 
@@ -20,7 +20,7 @@ timezone: America/Chicago
 
 scoring:
   model: claude-haiku-4-5-20251001
-  max_tokens: 1024
+  max_tokens: 2048
   max_jd_chars: 15000
 
 title_filter:

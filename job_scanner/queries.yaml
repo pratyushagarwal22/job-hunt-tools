@@ -48,6 +48,18 @@ queries:
     query: 'site:welcometothejungle.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad") -intitle:Staff -intitle:Principal -intitle:Director'
     enabled: true
 
+  - name: SmartRecruiters
+    query: 'site:jobs.smartrecruiters.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad") -intitle:Staff -intitle:Principal -intitle:Director'
+    enabled: true
+
+  - name: Jobvite
+    query: 'site:jobs.jobvite.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad") -intitle:Staff -intitle:Principal -intitle:Director'
+    enabled: true
+
+  - name: Breezy HR
+    query: 'site:breezy.hr ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad") -intitle:Staff -intitle:Principal -intitle:Director'
+    enabled: true
+
 # ---------------------------------------------------------------------------
 # Company sites — big companies with their own career domains.
 # Same title list as above. One query per company.
