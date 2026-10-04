@@ -23,7 +23,7 @@ from job_scanner import (
 )
 from job_scanner.location_filter import location_drop_reason
 from job_scanner.title_filter import title_drop_reason
-from job_scanner.url_utils import normalize_url
+from job_scanner.url_utils import normalize_url, platform_for_url
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +68,8 @@ def run_pipeline(max_jobs: int | None) -> dict:
     cap = max_jobs if max_jobs is not None else settings["max_jobs_per_run"]
     model = settings["scoring"]["model"]
 
-    existing_urls = sheets_repo.get_existing_urls(sheet_id)
+    columns = sheets_repo.get_columns(sheet_id)
+    existing_urls = sheets_repo.get_existing_urls(sheet_id, columns)
     logger.info(
         "RUN start %s | cap %d | ats_lookback_days %d | model %s | existing URLs %d",
         run_start.strftime("%Y-%m-%d %H:%M %Z"), cap, settings["ats_lookback_days"], model,
@@ -145,7 +146,7 @@ def run_pipeline(max_jobs: int | None) -> dict:
     if not rows and failed:
         raise RuntimeError(f"Every scoring attempt failed ({failed} jobs); nothing written")
     if rows:
-        sheets_repo.append_jobs(sheet_id, rows)
+        sheets_repo.append_jobs(sheet_id, rows, columns)
         logger.info("Appended %d rows", len(rows))
     logger.info("RUN end | elapsed %.1fs", time.monotonic() - started)
 
@@ -244,6 +245,7 @@ def _collect_ats_jobs(companies: list[dict], settings: dict) -> list[dict]:
                     url=item.get("url") or "",
                     raw_date=item.get("posted_date"),
                     jd_text=item.get("jd_text") or "",
+                    platform=ats,
                     source_query=f"{ats}:{company['name']}",
                 )
             )
@@ -392,7 +394,7 @@ def _jd_kind(job: dict, jd_source: str) -> str:
 
 def _score_to_row(
     job: dict, jd_text: str, jd_source: str, config: dict, settings: dict, date_found: str
-) -> tuple[list, scoring_client.ScoreResult, scoring_client.Usage]:
+) -> tuple[dict, scoring_client.ScoreResult, scoring_client.Usage]:
     scoring = settings["scoring"]
     hints = {}
     if job["is_ats"]:
@@ -417,21 +419,22 @@ def _score_to_row(
         title, company, location = result.title, result.company, result.location
 
     posted = job["posted"]
-    row = [
-        "",
-        result.match_score,
-        jd_source,
-        title,
-        company,
-        location,
-        result.visa_mention,
-        result.core_requirements,
-        result.reason,
-        job["url"],
-        date_utils.format_posted_date(posted, settings["timezone"]) if posted else "",
-        date_found,
-        job["source_query"],
-    ]
+    row = dict(
+        applied="",
+        match_score=result.match_score,
+        url=job["url"],
+        platform=job["platform"] if job["is_ats"] else platform_for_url(job["url"]),
+        title=title,
+        company=company,
+        location=location,
+        visa_mention=result.visa_mention,
+        jd_source=jd_source,
+        core_requirements=result.core_requirements,
+        reason=result.reason,
+        posted_date=date_utils.format_posted_date(posted, settings["timezone"]) if posted else "",
+        date_found=date_found,
+        source_query=job["source_query"],
+    )
     return row, result, usage
 
 

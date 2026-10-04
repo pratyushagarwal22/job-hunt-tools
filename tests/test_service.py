@@ -14,6 +14,7 @@ TZ = "America/Chicago"
 QUERY_A = 'site:jobs.example.com ("Software Engineer")'
 QUERY_B = 'site:careers.example.org ("Software Engineer")'
 USAGE_PER_CALL = Usage(input=1000, output=200, cache_read=4000, cache_write=500)
+COLUMNS = {name: index for index, name in enumerate(service.sheets_repo.JOBS_HEADERS)}
 
 
 def _settings(**overrides) -> dict:
@@ -107,6 +108,7 @@ class Harness:
         monkeypatch.setattr(service.ats_client, "get_ashby_board", self._ashby_board)
         monkeypatch.setattr(service.jd_client, "fetch_jd", self._fetch_jd)
         monkeypatch.setattr(service.scoring_client, "score_job", self._score)
+        monkeypatch.setattr(service.sheets_repo, "get_columns", self._columns)
         monkeypatch.setattr(service.sheets_repo, "get_existing_urls", self._existing)
         monkeypatch.setattr(service.sheets_repo, "append_jobs", self._append)
 
@@ -142,12 +144,18 @@ class Harness:
         result = self.score_impl(**kwargs) if self.score_impl else _score_result()
         return result, USAGE_PER_CALL
 
-    def _existing(self, sheet_id):
+    def _columns(self, sheet_id):
         assert sheet_id == "sheet-123"
+        return COLUMNS
+
+    def _existing(self, sheet_id, columns):
+        assert sheet_id == "sheet-123"
+        assert columns is COLUMNS
         return set(self.existing)
 
-    def _append(self, sheet_id, rows):
+    def _append(self, sheet_id, rows, columns):
         assert sheet_id == "sheet-123"
+        assert columns is COLUMNS
         self.appends.append(rows)
 
     @property
@@ -156,7 +164,7 @@ class Harness:
         return self.appends[0]
 
     def urls(self):
-        return [row[9] for row in self.rows]
+        return [row["url"] for row in self.rows]
 
 
 def test_dedup_against_sheet_and_in_run_ats_wins(monkeypatch):
@@ -175,8 +183,9 @@ def test_dedup_against_sheet_and_in_run_ats_wins(monkeypatch):
 
     assert h.urls() == ["https://jobs.example.com/both"]
     (row,) = h.rows
-    assert row[2] == "full"
-    assert row[12] == "greenhouse:Acme"
+    assert row["jd_source"] == "full"
+    assert row["source_query"] == "greenhouse:Acme"
+    assert row["platform"] == "greenhouse"
     assert h.jd_calls == []
     assert summary["found"] == 4
     assert summary["new"] == 1
@@ -329,11 +338,11 @@ def test_failed_jobs_not_written_and_counted(monkeypatch):
     assert summary["failed"] == 3
 
 
-def test_rows_have_13_columns_in_sheet_order(monkeypatch):
+def test_rows_are_dicts_keyed_by_header(monkeypatch):
     h = Harness(
         monkeypatch,
         search_pages={QUERY_A: [[
-            _search_result("https://s.example.com/job?utm_medium=x", date="just now"),
+            _search_result("https://jobs.lever.co/acme/job?utm_medium=x", date="just now"),
         ]]},
         ats_jobs={"acme": [
             _ats_job("https://a.example.com/job", title="Software Engineer, New Grad",
@@ -345,26 +354,62 @@ def test_rows_have_13_columns_in_sheet_order(monkeypatch):
 
     service.run_pipeline(None)
 
-    assert all(len(row) == 13 for row in h.rows)
+    assert all(set(row) == set(service.sheets_repo.JOBS_HEADERS) for row in h.rows)
     search_row, ats_row, noloc_row = h.rows
     today = datetime.now(service.ZoneInfo(TZ)).strftime("%Y-%m-%d")
 
-    assert search_row[0] == ""
-    assert search_row[:10] == [
-        "", 8.2, "full", "Haiku Title", "Haiku Co", "Haiku Loc", "Not mentioned", "Python",
-        "Good fit", "https://s.example.com/job",
-    ]
-    assert search_row[10] == today
-    assert re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", search_row[11])
-    assert search_row[12] == QUERY_A
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", search_row["date_found"])
+    assert search_row == dict(
+        applied="", match_score=8.2, url="https://jobs.lever.co/acme/job", platform="lever",
+        title="Haiku Title", company="Haiku Co", location="Haiku Loc",
+        visa_mention="Not mentioned", jd_source="full", core_requirements="Python",
+        reason="Good fit", posted_date=today, date_found=search_row["date_found"],
+        source_query=QUERY_A,
+    )
+    assert ats_row == dict(
+        applied="", match_score=8.2, url="https://a.example.com/job", platform="greenhouse",
+        title="Software Engineer, New Grad", company="Acme", location="Austin, TX",
+        visa_mention="Not mentioned", jd_source="full", core_requirements="Python",
+        reason="Good fit", posted_date="2026-01-15", date_found=search_row["date_found"],
+        source_query="greenhouse:Acme",
+    )
+    assert noloc_row["location"] == "Haiku Loc"
+    assert noloc_row["posted_date"] == "2026-01-14"
 
-    assert ats_row == [
-        "", 8.2, "full", "Software Engineer, New Grad", "Acme", "Austin, TX", "Not mentioned",
-        "Python", "Good fit", "https://a.example.com/job", "2026-01-15", search_row[11],
-        "greenhouse:Acme",
+
+def test_platform_is_ats_name_for_ats_jobs_and_from_url_for_search(monkeypatch):
+    h = Harness(
+        monkeypatch,
+        companies=[dict(name="Acme", ats="ashby", slug="acme")],
+        search_pages={QUERY_A: [[
+            _search_result("https://boards.greenhouse.io/x/jobs/1", date="1 hour ago"),
+            _search_result("https://unknown.example.com/job", date="2 hours ago"),
+        ]]},
+        ats_jobs={"acme": [_ats_job("https://a.example.com/job", posted=_hours_ago_iso(5))]},
+    )
+
+    service.run_pipeline(None)
+
+    assert [(row["url"], row["platform"]) for row in h.rows] == [
+        ("https://boards.greenhouse.io/x/jobs/1", "greenhouse"),
+        ("https://unknown.example.com/job", "other"),
+        ("https://a.example.com/job", "ashby"),
     ]
-    assert noloc_row[5] == "Haiku Loc"
-    assert noloc_row[10] == "2026-01-14"
+
+
+def test_missing_headers_fatal_before_anything_else(monkeypatch):
+    h = Harness(monkeypatch, search_pages={QUERY_A: [[_search_result("https://s.example.com/a")]]})
+
+    def missing(sheet_id):
+        raise service.sheets_repo.MissingHeadersError(["platform"])
+
+    monkeypatch.setattr(service.sheets_repo, "get_columns", missing)
+
+    with pytest.raises(service.sheets_repo.MissingHeadersError, match="platform"):
+        service.run_pipeline(None)
+    assert h.search_calls == []
+    assert h.score_calls == []
+    assert h.appends == []
 
 
 def test_undated_job_has_blank_posted_date(monkeypatch):
@@ -372,7 +417,7 @@ def test_undated_job_has_blank_posted_date(monkeypatch):
 
     service.run_pipeline(None)
 
-    assert h.rows[0][10] == ""
+    assert h.rows[0]["posted_date"] == ""
 
 
 def test_search_snippet_fallback(monkeypatch):
@@ -392,7 +437,7 @@ def test_search_snippet_fallback(monkeypatch):
     assert call["jd_source"] == "snippet"
     assert "Software Engineer at JSCo" in call["jd_text"]
     assert "We build apps." in call["jd_text"]
-    assert h.rows[0][2] == "snippet"
+    assert h.rows[0]["jd_source"] == "snippet"
 
 
 ASHBY_ID_1 = "7133d205-5421-4336-a8e2-6037b5f55073"
@@ -422,7 +467,7 @@ def test_ashby_search_url_gets_jd_from_api_board_cached(monkeypatch, caplog):
     assert h.jd_calls == []
     assert [c["jd_text"] for c in h.score_calls] == ["Ashby JD one", "Ashby JD two"]
     assert all(c["jd_source"] == "full" for c in h.score_calls)
-    assert [row[2] for row in h.rows] == ["full", "full"]
+    assert [row["jd_source"] for row in h.rows] == ["full", "full"]
     assert _messages(caplog, "JD") == ["JD full fetched 2 | snippet fallback 0 | ATS full 0"]
 
 
@@ -486,7 +531,7 @@ def test_ats_empty_jd_scored_from_title_and_location(monkeypatch):
     assert call["jd_source"] == "snippet"
     assert "Software Engineer" in call["jd_text"]
     assert "Denver, CO" in call["jd_text"]
-    assert h.rows[0][2] == "snippet"
+    assert h.rows[0]["jd_source"] == "snippet"
 
 
 def test_scoring_settings_and_hints_passed(monkeypatch):
@@ -677,7 +722,7 @@ def test_one_search_query_failing_is_not_fatal(monkeypatch):
 def test_sheet_read_error_is_fatal(monkeypatch):
     Harness(monkeypatch)
 
-    def boom(sheet_id):
+    def boom(sheet_id, columns):
         raise RuntimeError("Google Sheets read failed: HTTP 403")
 
     monkeypatch.setattr(service.sheets_repo, "get_existing_urls", boom)
@@ -689,7 +734,7 @@ def test_sheet_read_error_is_fatal(monkeypatch):
 def test_sheet_append_error_is_fatal(monkeypatch):
     Harness(monkeypatch, search_pages={QUERY_A: [[_search_result("https://s.example.com/a")]]})
 
-    def boom(sheet_id, rows):
+    def boom(sheet_id, rows, columns):
         raise RuntimeError("Google Sheets append failed: HTTP 500")
 
     monkeypatch.setattr(service.sheets_repo, "append_jobs", boom)

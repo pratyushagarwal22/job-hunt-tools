@@ -1,4 +1,6 @@
-from job_scanner.url_utils import normalize_url
+import pytest
+
+from job_scanner.url_utils import normalize_url, platform_for_url
 
 
 def test_strips_utm_params():
@@ -139,3 +141,48 @@ def test_idempotent():
 def test_mixed_everything():
     url = "https://WWW.Example.COM/Careers/SWE/?utm_campaign=a&gh_jid=42&source=b&gh_src=c&ref=d#top"
     assert normalize_url(url) == "https://www.example.com/Careers/SWE?gh_jid=42"
+
+
+@pytest.mark.parametrize("url, platform", [
+    ("https://jobs.ashbyhq.com/cohere/7133d205-5421-4336-a8e2-6037b5f55073", "ashby"),
+    ("https://job-boards.greenhouse.io/anthropic/jobs/123", "greenhouse"),
+    ("https://boards.greenhouse.io/stripe/jobs/456", "greenhouse"),
+    ("https://stripe.com/jobs/listing/swe/789?gh_jid=789", "greenhouse"),
+    ("https://jobs.lever.co/acme/abc-123", "lever"),
+    ("https://apply.workable.com/acme/j/ABC123/", "workable"),
+    ("https://wellfound.com/jobs/123-software-engineer", "wellfound"),
+    ("https://www.ycombinator.com/companies/acme/jobs/abc-swe", "workatastartup"),
+    ("https://www.welcometothejungle.com/en/companies/acme/jobs/swe", "welcometothejungle"),
+    ("https://jobs.smartrecruiters.com/Acme/123-software-engineer", "smartrecruiters"),
+    ("https://jobs.jobvite.com/acme/job/oABC", "jobvite"),
+    ("https://acme.breezy.hr/p/abc-software-engineer", "breezy"),
+    ("https://jobs.a16z.com/jobs/acme/swe", "a16z"),
+    ("https://acme.wd1.myworkdayjobs.com/en-US/External/job/SWE_R123", "workday"),
+    ("https://www.amazon.jobs/en/jobs/123/sde", "company_site"),
+    ("https://www.google.com/about/careers/applications/jobs/results/123-swe", "company_site"),
+    ("https://jobs.apple.com/en-us/details/200-123/swe", "company_site"),
+    ("https://jobs.careers.microsoft.com/global/en/job/123", "company_site"),
+    ("https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite/job/SWE_JR1", "company_site"),
+    ("https://www.tesla.com/careers/search/job/swe-123", "company_site"),
+    ("https://www.metacareers.com/jobs/123/", "company_site"),
+    ("https://explore.jobs.netflix.net/careers/job/123", "company_site"),
+    ("https://careers.snap.com/job?id=R123", "company_site"),
+    ("https://jobs.sequoiacap.com/companies/acme/jobs/1", "other"),
+])
+def test_platform_for_url(url, platform):
+    assert platform_for_url(url) == platform
+
+
+def test_platform_host_is_case_insensitive():
+    assert platform_for_url("HTTPS://JOBS.LEVER.CO/Acme/1") == "lever"
+    assert platform_for_url("https://Acme.Breezy.HR/p/1") == "breezy"
+
+
+def test_platform_gh_jid_param_case_insensitive_on_company_domain():
+    assert platform_for_url("https://careers.example.com/open?GH_JID=42") == "greenhouse"
+
+
+def test_platform_lookalike_hosts_are_other():
+    assert platform_for_url("https://notgreenhouse.io/jobs/1") == "other"
+    assert platform_for_url("https://jobs.lever.co.evil.com/x") == "other"
+    assert platform_for_url("") == "other"

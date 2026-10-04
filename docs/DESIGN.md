@@ -6,7 +6,7 @@ Find fresh US-based software engineering jobs, score them against my profile, an
 
 ## In Scope
 
-- `job_scanner/` — automated pipeline (GitHub Actions cron, twice daily)
+- `job_scanner/` — automated pipeline (GitHub Actions cron, twice daily on UTC crons `'7 10 * * *'` (5:07 AM CDT / 4:07 AM CST) and `'7 20 * * *'` (3:07 PM CDT / 2:07 PM CST). GitHub scheduled runs are best-effort and often start hours late, so runs are set early; manual runs start immediately.)
 - `email_finder/` — manual CLI tool
 - One Google Sheet, two tabs ("Jobs" and "Contacts")
 - Two job sources: search API queries and direct ATS company board polling
@@ -75,7 +75,7 @@ job-hunt-tools/
 
 ## Data Flow — job_scanner
 
-1. Load `queries.yaml`, `companies.yaml`, `config/profile.yaml`, `config/candidate.md`, `settings.yaml`. Create `run_start` once, tz-aware in the configured `timezone`. Read existing URLs from the "Jobs" sheet (column J, normalized).
+1. Load `queries.yaml`, `companies.yaml`, `config/profile.yaml`, `config/candidate.md`, `settings.yaml`. Create `run_start` once, tz-aware in the configured `timezone`. Read the "Jobs" header row once and map columns by header name; if any of the 14 Jobs headers is missing, stop with a fatal error naming them (nothing is written). Read existing URLs from the column headed `url` (normalized).
 2. **Source B — ATS direct** (collected first): for each company in `companies.yaml` → call Greenhouse/Lever/Ashby public job list API → keep only jobs posted in the last N days (`ats_lookback_days` in `settings.yaml`, default 2). Date fields: Greenhouse `first_published` (fallback `updated_at`), Lever `createdAt` (Unix ms), Ashby `publishedAt`. `posted_date` is kept as the raw API value; `date_utils.py` parses it. Bad slug / non-2xx / non-JSON → warning, company returns no jobs.
 3. **Source A — Search API (Serper)**: for each enabled query (`queries` + `company_sites`) → call Serper with the `search` settings: `tbs=qdr:d` (past 24 hours), `gl=us` (US-biased results — sets where the search appears to come from, does NOT filter by job location), `num=10` results per page. Paginate up to `max_pages_per_query` pages (each page is one paid Serper credit). Stop early if a page returns no results or errors.
 4. Merge into one list, **ATS jobs first**, so when the same URL comes from both sources the ATS copy (structured title/company/location + full JD) wins dedup.
@@ -108,18 +108,27 @@ job-hunt-tools/
 
 ### Jobs tab
 
+Header row (tab-separated, paste into A1):
+
+```text
+applied	match_score	platform	url	title	company	location	visa_mention	jd_source	core_requirements	reason	posted_date	date_found	source_query
+```
+
+Columns are matched by header name (trimmed, case-insensitive), not position, so they can be in any order. All 14 headers must exist in row 1 or the run fails before writing anything. `sheets_repo` takes rows as dicts keyed by header name and writes each value in its header's column; columns with other headers stay blank. Appends use `RAW` + `INSERT_ROWS`.
+
 | Column | Type | Notes |
 |---|---|---|
 | applied | Checkbox | Code appends "" (blank). Marked by hand; never pre-fill checkboxes on empty rows (see Open Risks). Never overwritten by code. |
 | match_score | Number | 1.0–10.0 from Haiku (one decimal, e.g. 7.5) |
-| jd_source | String | "full" (fetched JD or ATS API) or "snippet" (scored from search title + snippet) |
+| platform | String | ATS jobs: the ATS name (`greenhouse` / `lever` / `ashby`). Search jobs: `url_utils.platform_for_url` by host — `ashby`, `greenhouse` (also any URL with `gh_jid`), `lever`, `workable`, `wellfound`, `workatastartup`, `welcometothejungle`, `smartrecruiters`, `jobvite`, `breezy`, `a16z`, `workday`, `company_site` (big-company career hosts), else `other`. Older rows: `_scratch/backfill_platform.py`. |
+| url | String | Normalized, used as dedup key |
 | title | String | From ATS source data when available; from Haiku for search results |
 | company | String | From ATS source data when available; from Haiku for search results |
 | location | String | Includes remote/hybrid/onsite as plain text |
 | visa_mention | String | From Haiku output |
+| jd_source | String | "full" (fetched JD or ATS API) or "snippet" (scored from search title + snippet) |
 | core_requirements | String | From Haiku output |
 | reason | String | One-line match reason from Haiku |
-| url | String | Normalized, used as dedup key |
 | posted_date | String | `YYYY-MM-DD`. ATS: from ATS API date field. Search: converted from Serper's relative `date` string using the run's start time. Blank if missing or unparseable. |
 | date_found | String | `YYYY-MM-DD HH:MM` (local time per `timezone` setting in settings.yaml). |
 | source_query | String | Which query or company found this job |
@@ -251,7 +260,7 @@ Scorer receives two inputs: `config/candidate.md` (one-page evidence doc) and `c
 | JD snippet fallback for search results | Many career pages are JavaScript-heavy and return no text on plain fetch. Scoring from title + snippet is better than skipping the job entirely |
 | `max_pages_per_query` (currently 4 in `settings.yaml`) | Each page is a paid Serper call (1 credit at `num=10`); pagination stops early on an empty page, so the cap is a ceiling, not the typical spend |
 | Greenhouse `first_published` as posted_date | `updated_at` changes whenever an old posting is edited, making old jobs look new. `first_published` reflects the original publish date. Falls back to `updated_at` if `first_published` is missing. |
-| All dates stored in one timezone | `timezone` setting in settings.yaml (default `America/Chicago`). CI runs in UTC; without conversion the 9 PM CT run would show the next day's date. Both `posted_date` and `date_found` use the configured timezone. |
+| All dates stored in one timezone | `timezone` setting in settings.yaml (default `America/Chicago`). CI runs in UTC; without conversion an evening CT run (e.g. a late-starting scheduled run) would show the next day's date. Both `posted_date` and `date_found` use the configured timezone. |
 | Serper dates converted to absolute dates | Serper returns relative strings ("21 hours ago") or absolute ones ("Sep 28, 2026"). Conversion uses the run's start time so all dates in a run are consistent. Unparseable dates → blank `posted_date`. |
 
 ## Open Risks

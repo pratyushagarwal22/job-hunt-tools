@@ -28,11 +28,11 @@ python -c "
 from shared.sheets import read_rows
 import os, dotenv
 dotenv.load_dotenv()
-rows = read_rows(os.environ['SHEET_ID'], 'Jobs', 'A1:M1')
+rows = read_rows(os.environ['SHEET_ID'], 'Jobs', 'A1:N1')
 print(rows)
 "
 ```
-**Expected output**: A list containing one list — the 13 header column names from the Jobs tab (`['applied', 'match_score', 'jd_source', ...]`). If the sheet is unreachable, a clear error with the HTTP status.
+**Expected output**: A list containing one list — the 14 header column names from the Jobs tab (`['applied', 'match_score', 'platform', 'url', 'title', 'company', 'location', 'visa_mention', 'jd_source', 'core_requirements', 'reason', 'posted_date', 'date_found', 'source_query']`; the scanner matches columns by header name, so any order works). If the sheet is unreachable, a clear error with the HTTP status.
 
 **Checkbox append check** (see Open Risks in docs/DESIGN.md):
 ```bash
@@ -42,9 +42,9 @@ import os, dotenv
 dotenv.load_dotenv()
 sheet_id = os.environ['SHEET_ID']
 # Append one test row
-append_rows(sheet_id, 'Jobs', [['', 7.5, 'full', 'Test Title', 'Test Co', 'Remote', '', '', 'test reason', 'https://example.com/test', '', '2026-09-29 21:00', 'test']])
+append_rows(sheet_id, 'Jobs', [['', 7.5, 'other', 'https://example.com/test', 'Test Title', 'Test Co', 'Remote', '', 'full', '', 'test reason', '', '2026-09-29 21:00', 'test']])
 # Read back the last row to check where it landed
-rows = read_rows(sheet_id, 'Jobs', 'A1:M1000')
+rows = read_rows(sheet_id, 'Jobs', 'A1:N1000')
 print(f'Total rows (including header): {len(rows)}')
 print(f'Last row: {rows[-1]}')
 "
@@ -391,8 +391,9 @@ pytest tests/test_scoring_client.py -v
 **What each module exposes**:
 
 `sheets_repo.py`:
-- `get_existing_urls(sheet_id: str) -> set[str]` — reads the `url` column (`J2:J`) from the Jobs tab, normalized.
-- `append_jobs(sheet_id: str, rows: list[list]) -> None` — appends rows to the Jobs tab.
+- `get_columns(sheet_id: str) -> dict[str, int]` — reads the Jobs header row once per run and maps the 14 headers by name (trimmed, case-insensitive); raises a fatal error naming any missing headers.
+- `get_existing_urls(sheet_id: str, columns) -> set[str]` — reads the column headed `url` from the Jobs tab, normalized.
+- `append_jobs(sheet_id: str, rows: list[dict], columns) -> None` — appends rows (dicts keyed by header name) to the Jobs tab, each value in its header's column.
 - `get_sheet_title(sheet_id: str) -> str` — passthrough to `shared/sheets.get_sheet_title`.
 - Uses `shared/sheets.py` for auth and raw operations.
 
@@ -428,7 +429,7 @@ python -m job_scanner.main --max-jobs 2
 found 42, new 12, filtered 2, scored 2, failed 0, skipped (cap): 8
 ```
 - The TEST sheet has 2 new rows appended (or fewer if < 2 new jobs found).
-- Each row has all 13 columns in place (applied is blank, match_score is a number, url is normalized, etc.).
+- Each row has all 14 columns in place (applied is blank, match_score is a number, url is normalized, etc.).
 - New rows land directly after the last data row, not after row 1000.
 - No crashes. Failed jobs (if any) are logged but don't stop the run.
 - Run completes in under 5 minutes (2 jobs = 2 Haiku calls + JD fetches).
@@ -484,7 +485,7 @@ python -m job_scanner.main --max-jobs 2
 - `CANDIDATE_MD_B64` (base64-encoded config/candidate.md)
 
 **Workflow behavior**:
-1. Cron: two schedule entries — `cron: '7 9 * * *'` and `cron: '7 21 * * *'`, each with `timezone: "America/Chicago"` (9:07 AM and 9:07 PM Chicago time, DST handled automatically; off the hour because top-of-hour scheduled runs are often delayed). **Verify the schedule `timezone` field against GitHub docs before relying on it (fallback: UTC cron, e.g. `7 14 * * *` / `7 2 * * *` for CDT, accepting a 1-hour DST shift).**
+1. Cron: two UTC schedule entries — `cron: '7 10 * * *'` (5:07 AM CDT / 4:07 AM CST) and `cron: '7 20 * * *'` (3:07 PM CDT / 2:07 PM CST); CST applies after DST ends on Nov 1. GitHub scheduled runs are best-effort and often start hours late, so runs are set early; manual runs start immediately.
 2. `workflow_dispatch`: manual trigger with optional `max_jobs` input.
 3. `concurrency`: group `job-scanner` with `cancel-in-progress: false`. Prevents two runs (e.g. a cron trigger and a manual "Run workflow" click) from overlapping and both appending the same jobs to the real sheet. The second run queues until the first finishes.
 4. `timeout-minutes: 45` — prevents a hung run from burning Actions minutes indefinitely (cap 150 = up to 150 JD fetches + scoring calls).
@@ -520,7 +521,7 @@ pytest -v
 # Locally (GITHUB_STEP_SUMMARY unset): same log lines, no error about the summary.
 ```
 
-**Cron times note**: If GitHub supports the schedule `timezone` field, it converts automatically — no manual UTC math, no DST drift. Confirm in GitHub docs; otherwise use the UTC fallback above.
+**Cron times note**: The crons are plain UTC, so the local run time shifts by one hour with DST (5:07 AM / 3:07 PM CDT in summer, 4:07 AM / 2:07 PM CST in winter).
 
 ---
 

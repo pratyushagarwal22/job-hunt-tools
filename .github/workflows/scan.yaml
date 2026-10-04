@@ -2,10 +2,8 @@ name: Job Scanner
 
 on:
   schedule:
-    - cron: '7 9 * * *'
-      timezone: "America/Chicago"
-    - cron: '7 21 * * *'
-      timezone: "America/Chicago"
+    - cron: '7 10 * * *'   # 5:07 AM CDT / 4:07 AM CST
+    - cron: '7 20 * * *'   # 3:07 PM CDT / 2:07 PM CST
   workflow_dispatch:
     inputs:
       max_jobs:

@@ -219,6 +219,7 @@ location_filter:
     - "Montréal"
     - "Quebec"
     - "Québec"
+    - Ottawa
     # India
     - "India"
     - "Bangalore"

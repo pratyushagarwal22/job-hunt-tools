@@ -84,13 +84,15 @@ Edit both. `config/profile.yaml` holds your match criteria and evaluation rules;
 
 ### 5. Sheet tabs and headers
 
-Create the TEST and production sheets with the same layout. Row 1 holds the headers below, in this exact order, starting at column A.
+Create the TEST and production sheets with the same layout. Row 1 holds the headers below, starting at column A.
 
-`Jobs` tab (columns A–M):
+`Jobs` tab (14 columns, A–N):
 
 ```text
-applied	match_score	jd_source	title	company	location	visa_mention	core_requirements	reason	url	posted_date	date_found	source_query
+applied	match_score	platform	url	title	company	location	visa_mention	jd_source	core_requirements	reason	posted_date	date_found	source_query
 ```
+
+The scanner matches `Jobs` columns by header name (trimmed, case-insensitive), not by position, so they can be in any order and you can add your own. All 14 headers above must exist in row 1; if any is missing, the run stops with an error naming the missing headers and nothing is written. Columns with other headers are left blank on new rows. `platform` is the job board or ATS (`greenhouse`, `lever`, `ashby`, `workday`, `company_site`, …, else `other`); to fill it on older rows, run `python _scratch/backfill_platform.py` (dry run) and then with `--apply`.
 
 `Contacts` tab (columns A–I, used by the planned `email_finder`):
 
@@ -211,7 +213,7 @@ CI never sees your local files. **After every local edit to `config/profile.yaml
 
 ### Schedule, concurrency, timeout
 
-- **Schedule**: 9:07 AM and 9:07 PM America/Chicago, every day (`cron: '7 9 * * *'` and `cron: '7 21 * * *'` with `timezone: "America/Chicago"`, so DST is handled). Off the hour because top-of-hour scheduled runs are often delayed. Scheduled runs only fire from the workflow file on the **default branch (`master`)**; changes to `scan.yaml` on other branches don't affect the schedule until merged.
+- **Schedule**: twice a day on UTC crons `cron: '7 10 * * *'` (5:07 AM CDT / 4:07 AM CST) and `cron: '7 20 * * *'` (3:07 PM CDT / 2:07 PM CST); the CST times apply after DST ends on Nov 1. GitHub scheduled runs are best-effort and often start hours late, so runs are set early; manual runs start immediately. Scheduled runs only fire from the workflow file on the **default branch (`master`)**; changes to `scan.yaml` on other branches don't affect the schedule until merged.
 - **Concurrency**: group `job-scanner`, `cancel-in-progress: false`. A second run (e.g. a manual click during a scheduled run) queues until the first finishes, so two runs never append the same jobs.
 - **Timeout**: 45 minutes per run.
 - **Failure**: the run goes red and GitHub emails you.
