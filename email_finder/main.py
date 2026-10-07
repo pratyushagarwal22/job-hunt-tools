@@ -35,13 +35,16 @@ def main(argv: list[str] | None = None) -> int:
         "--file", default=None,
         help="File with one URL per line (default when no URLs: email_finder/linkedin-profiles.txt).",
     )
-    parser.add_argument("--draft", action="store_true", help="Draft an outreach line for found rows.")
+    parser.add_argument(
+        "--draft", action="store_true",
+        help="Draft a LinkedIn connection note (outreach_line) for each person found.",
+    )
     args = parser.parse_args(argv)
 
     try:
         settings = service.load_settings()
-    except Exception:
-        logger.exception("Could not read email_finder/settings.yaml")
+    except Exception as err:
+        logger.error("Could not read email_finder/settings.yaml: %s", type(err).__name__)
         return 1
     missing = [
         name for name in service.required_env_vars(settings, args.draft) if not os.environ.get(name)
@@ -53,6 +56,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         print(f"Writing to sheet: {sheets_repo.get_sheet_title(os.environ['SHEET_ID'])}", flush=True)
         result = service.run(args.urls, args.file, args.draft)
+    except (service.RunError, sheets_repo.MissingHeadersError) as err:
+        logger.error("%s", err)
+        return 1
     except Exception:
         logger.exception("Fatal error, run aborted")
         return 1

@@ -42,7 +42,11 @@ PROVIDER_ENV_VARS = {
 _PROFILE_URL = re.compile(r"^https://linkedin\.com/in/[^/\s]+$")
 
 
-class TooManyUrlsError(ValueError):
+class RunError(ValueError):
+    """An expected, user-fixable error; main prints its message without a traceback."""
+
+
+class TooManyUrlsError(RunError):
     pass
 
 
@@ -62,13 +66,30 @@ def _now(tz_name: str) -> datetime:
     return datetime.now(ZoneInfo(tz_name))
 
 
+def _read(reader, path: Path | str, label: str):
+    try:
+        return reader(path)
+    except (OSError, UnicodeDecodeError) as err:
+        raise RunError(f"Could not read {label} {path}: {type(err).__name__}") from None
+
+
+def _read_text(path: Path | str, label: str) -> str:
+    return _read(lambda p: Path(p).read_text(), path, label)
+
+
 def _read_input(urls: list[str], file_path: str | None) -> list[InputEntry]:
     entries = [entry for entry in map(parse_line, urls) if entry is not None]
-    if file_path:
-        entries += read_file(file_path)
-    elif not urls:
-        entries = read_file(DEFAULT_INPUT)
+    path = file_path or (None if urls else DEFAULT_INPUT)
+    if path:
+        entries += _read(read_file, path, "input file")
     return entries
+
+
+def _read_draft_files() -> tuple[str, str]:
+    """(candidate.md, outreach examples or "" when the optional file is missing)."""
+    candidate_md = _read_text(_CANDIDATE_PATH, "candidate file")
+    examples_md = _read_text(_EXAMPLES_PATH, "examples file") if _EXAMPLES_PATH.exists() else ""
+    return candidate_md, examples_md
 
 
 def _error_text(err: BaseException) -> str:
@@ -149,11 +170,11 @@ def _first_name(name: str) -> str:
     return parts[0] if parts else ""
 
 
-def _draft_lines(found: dict, notes: dict, settings: dict) -> tuple[dict[str, str], bool]:
+def _draft_lines(
+    found: dict, notes: dict, settings: dict, candidate_md: str, examples_md: str
+) -> tuple[dict[str, str], bool]:
     """Returns ({url: outreach_line}, auth_failed)."""
     cfg = settings["outreach"]
-    candidate_md = _CANDIDATE_PATH.read_text()
-    examples_md = _EXAMPLES_PATH.read_text() if _EXAMPLES_PATH.is_file() else ""
     lines = {}
     for url, (_, match) in found.items():
         try:
@@ -165,21 +186,22 @@ def _draft_lines(found: dict, notes: dict, settings: dict) -> tuple[dict[str, st
                 max_chars=cfg.get("max_chars", DEFAULT_MAX_CHARS),
             )
         except (anthropic.AuthenticationError, anthropic.PermissionDeniedError) as err:
-            logger.error("DRAFT stopped: %s; remaining outreach lines left blank", type(err).__name__)
+            logger.error("DRAFT stopped: %s; remaining connection notes left blank", type(err).__name__)
             return lines, True
         except Exception as err:
-            logger.warning("DRAFT failed for %s: %s; outreach line left blank", url, type(err).__name__)
+            logger.warning("DRAFT failed for %s: %s; connection note left blank", url, type(err).__name__)
     return lines, False
 
 
 def run(urls: list[str], file_path: str | None, draft: bool, sleep=time.sleep) -> dict:
-    """Returns {lines, summary, exit_code}. Raises before any lookup on bad settings,
-    a missing Contacts header or too many URLs."""
+    """Returns {lines, summary, exit_code}. Raises before any lookup on bad settings, an
+    unreadable input or draft file, a missing Contacts header or too many URLs."""
     settings = load_settings()
     providers = settings.get("providers") or []
     unknown = [p for p in providers if p not in _RUNNERS]
     if not providers or unknown:
-        raise ValueError(f"Invalid providers in settings.yaml: {unknown or 'none configured'}")
+        raise RunError(f"Invalid providers in settings.yaml: {unknown or 'none configured'}")
+    candidate_md, examples_md = _read_draft_files() if draft else ("", "")
 
     sheet_id = os.environ["SHEET_ID"]
     entries = _read_input(urls, file_path)
@@ -216,7 +238,10 @@ def run(urls: list[str], file_path: str | None, draft: bool, sleep=time.sleep) -
         _run_chain(to_look_up, settings, sleep) if to_look_up else ({}, [], [], False)
     )
 
-    outreach, draft_auth_failed = _draft_lines(found, notes, settings) if draft and found else ({}, False)
+    outreach, draft_auth_failed = (
+        _draft_lines(found, notes, settings, candidate_md, examples_md)
+        if draft and found else ({}, False)
+    )
 
     date_found = _now(settings["timezone"]).strftime("%Y-%m-%d %H:%M")
     not_found_set = set(not_found)

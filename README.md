@@ -2,7 +2,7 @@
 
 ## What this does
 
-Two small Python tools that feed one Google Sheet. **`job_scanner`** (live) runs twice a day on GitHub Actions: it polls tracked company boards on Greenhouse, Lever and Ashby, runs `site:` searches through the Serper API, dedups against the sheet, drops jobs by title, location and required years of experience, scores the rest with Claude against your profile, and appends the scored rows to the sheet's `Jobs` tab. **`email_finder`** (planned, not built yet) will be a manual CLI that takes LinkedIn profile URLs (arguments or `email_finder/linkedin-profiles.txt`), looks up each email through Prospeo and then Apify for Prospeo's misses (Apollo is supported but disabled; its API needs a paid plan), optionally drafts a LinkedIn connection note (`outreach_line`), and appends one row per URL to the `Contacts` tab.
+Two small Python tools that feed one Google Sheet. **`job_scanner`** (live) runs twice a day on GitHub Actions: it polls tracked company boards on Greenhouse, Lever and Ashby, runs `site:` searches through the Serper API, dedups against the sheet, drops jobs by title, location and required years of experience, scores the rest with Claude against your profile, and appends the scored rows to the sheet's `Jobs` tab. **`email_finder`** (live) is a manual CLI you run locally: it takes LinkedIn profile URLs (arguments or `email_finder/linkedin-profiles.txt`), looks up each email through Prospeo and then Apify for Prospeo's misses (Apollo is supported but disabled; its API needs a paid plan), and appends one row per URL to the `Contacts` tab. With `--draft` it also writes a short LinkedIn connection note into each found row's `outreach_line`; outreach emails are written by hand.
 
 All commands below are run from the repo root with the virtual environment active.
 
@@ -14,6 +14,10 @@ All commands below are run from the repo root with the virtual environment activ
 | Small local run (TEST sheet) | `python -m job_scanner.main --max-jobs 2` | [Local run and tests](#local-run-and-tests) |
 | Run tests | `pytest` | [Local run and tests](#local-run-and-tests) |
 | Local run with a saved log | `python -m job_scanner.main --max-jobs 5 2>&1 \| tee run.log` | [Local run and tests](#local-run-and-tests) |
+| Email lookup from `email_finder/linkedin-profiles.txt` (TEST sheet) | `python -m email_finder.main` | [Email finder](#email-finder) |
+| Email lookup for given URLs (TEST sheet) | `python -m email_finder.main <url> [<url> ...]` | [Email finder](#email-finder) |
+| Email lookup + connection-note drafts | `python -m email_finder.main --draft` | [Email finder](#email-finder) |
+| Real (prod) email lookup | `SHEET_ID=<prod id> python -m email_finder.main [--draft]` | [Email finder](#email-finder) |
 | Set a file secret | `base64 -i <file> \| gh secret set <NAME>` | [GitHub Actions](#github-actions) |
 | Set a plain secret | `gh secret set <NAME>` | [GitHub Actions](#github-actions) |
 | Manual CI run | `gh workflow run scan.yaml -f max_jobs=2` | [GitHub Actions](#github-actions) |
@@ -57,9 +61,9 @@ deactivate
 cp .env.example .env
 ```
 
-Fill in `SERPER_API_KEY`, `ANTHROPIC_API_KEY` and `SHEET_ID`. **`SHEET_ID` in `.env` is always the TEST sheet ID.** The production sheet ID lives only in GitHub secrets, so a local run writes to TEST unless you pass the production ID yourself. There is no `--test` flag; the environment decides which sheet is used. The planned `email_finder` runs only locally, so it writes to TEST by default; for real use, prefix the command with the production ID: `SHEET_ID=<prod id> python -m email_finder.main ...` (never put the production ID in `.env`). Every run prints `Writing to sheet: <title>` first so you can see which sheet it hit.
+Fill in `SERPER_API_KEY`, `ANTHROPIC_API_KEY` and `SHEET_ID`. **`SHEET_ID` in `.env` is always the TEST sheet ID.** The production sheet ID lives only in GitHub secrets, so a local run writes to TEST unless you pass the production ID yourself. There is no `--test` flag; the environment decides which sheet is used. `email_finder` runs only locally, so it writes to TEST by default; for real use, prefix the command with the production ID: `SHEET_ID=<prod id> python -m email_finder.main ...` (never put the production ID in `.env`). Every run prints `Writing to sheet: <title>` first so you can see which sheet it hit.
 
-`GOOGLE_APPLICATION_CREDENTIALS=service_account.json` is already set in the example. `PROSPEO_API_KEY` and `APIFY_TOKEN` are for the planned `email_finder` and are not needed yet. `APOLLO_API_KEY` is optional (paid Apollo plan only).
+`GOOGLE_APPLICATION_CREDENTIALS=service_account.json` is already set in the example. `PROSPEO_API_KEY` and `APIFY_TOKEN` are for `email_finder` (see [Email finder](#email-finder) for when each is required). `APOLLO_API_KEY` is optional (paid Apollo plan only).
 
 ### 3. Personal config files
 
@@ -102,7 +106,7 @@ applied	match_score	platform	url	title	company	location	visa_mention	jd_source	c
 
 The scanner matches `Jobs` columns by header name (trimmed, case-insensitive), not by position, so they can be in any order and you can add your own. All 14 headers above must exist in row 1; if any is missing, the run stops with an error naming the missing headers and nothing is written. Columns with other headers are left blank on new rows. `platform` is the job board or ATS (`greenhouse`, `lever`, `ashby`, `workday`, `company_site`, …, else `other`); to fill it on older rows, run `python _scratch/backfill_platform.py` (dry run) and then with `--apply`. That script is local-only: `_scratch/` is gitignored, so it is not in the repo.
 
-`Contacts` tab (11 columns, A–K, used by the planned `email_finder`; matched by header name like `Jobs`, and all 11 must exist):
+`Contacts` tab (11 columns, A–K, used by `email_finder`; matched by header name like `Jobs`, and all 11 must exist):
 
 ```text
 contacted	name	company	title	email	email_status	email_source	linkedin_url	notes	outreach_line	date_found
@@ -139,6 +143,131 @@ python -m job_scanner.main --max-jobs 5 2>&1 | tee run.log
 ```bash
 rm run.log
 ```
+
+## Email finder
+
+`email_finder` looks up emails for LinkedIn profile URLs and appends one row per URL to the `Contacts` tab. It runs only locally (never in CI).
+
+### Setup
+
+Copy the input file and add your profile URLs:
+
+```bash
+cp email_finder/linkedin-profiles.example.txt email_finder/linkedin-profiles.txt
+```
+
+Optional, for `--draft` (see [Personal config files](#3-personal-config-files)):
+
+```bash
+cp config/outreach_examples.example.md config/outreach_examples.md
+```
+
+Both copies are gitignored. The `Contacts` tab needs all 11 headers in row 1 (see [Sheet tabs and headers](#5-sheet-tabs-and-headers)).
+
+Required keys in `.env`, checked before any work (all missing ones are named in one error, exit 1):
+
+- Always: `SHEET_ID`, `GOOGLE_APPLICATION_CREDENTIALS`.
+- `PROSPEO_API_KEY` when `prospeo` is in `providers`, `APIFY_TOKEN` when `apify` is, `APOLLO_API_KEY` only when `apollo` is (it is not by default).
+- `ANTHROPIC_API_KEY` only with `--draft`. `--draft` also reads `config/candidate.md` (and `config/outreach_examples.md` if present) before any lookup; a missing or unreadable `candidate.md` is an error, exit 1.
+
+### Input file format
+
+`email_finder/linkedin-profiles.txt`, one LinkedIn profile URL per line:
+
+- Blank lines and lines starting with `#` are skipped.
+- A trailing `# note` (the `#` must follow a space) goes into the row's `notes` column and is the context for the `--draft` note (a role mentioned there gets referenced; no note → a networking note).
+- URLs are normalized: `https://`, `www.` / `uk.` / `m.` → `linkedin.com`, lowercase, no query, fragment or trailing slash. Deeper `/in/` paths are trimmed, so `https://www.linkedin.com/in/Jane-Doe/details/experience/` becomes `https://linkedin.com/in/jane-doe`.
+- Anything that isn't a `linkedin.com/in/<slug>` profile URL (`/pub/` links, company pages, other sites, text) is printed as `ignored` and never looked up.
+
+URLs passed on the command line follow the same rules. With URLs and no `--file`, the default file is not read.
+
+### Commands
+
+Look up every URL in `email_finder/linkedin-profiles.txt` (TEST sheet):
+
+```bash
+python -m email_finder.main
+```
+
+Look up specific URLs instead:
+
+```bash
+python -m email_finder.main https://www.linkedin.com/in/jane-doe-example/ https://www.linkedin.com/in/john-roe-example
+```
+
+Read a different input file:
+
+```bash
+python -m email_finder.main --file path/to/profiles.txt
+```
+
+Also draft a LinkedIn connection note for each person found:
+
+```bash
+python -m email_finder.main --draft
+```
+
+Real use, against the production sheet (never put the production ID in `.env`):
+
+```bash
+SHEET_ID=<prod id> python -m email_finder.main
+```
+
+```bash
+SHEET_ID=<prod id> python -m email_finder.main --draft
+```
+
+Without the prefix every run writes to the TEST sheet from `.env`. Check the first line, `Writing to sheet: <title>`.
+
+### Providers
+
+`providers` in `email_finder/settings.yaml` sets the order, `[prospeo, apify]` by default. Each provider runs once over the URLs still unmatched and passes its no-matches to the next. Prospeo makes one call per URL; Apify runs its actor once for all remaining URLs and returns no title or status (rows get `email_status` `unverified`).
+
+Apollo is supported but disabled: its free plan returns 403 `API_INACCESSIBLE`. To enable it on a paid plan, first verify the `bulk_match` mapping against a real response (see Open Risks in [`docs/DESIGN.md`](docs/DESIGN.md)), then set `APOLLO_API_KEY` in `.env` and add `apollo` to `providers` (for example `[prospeo, apify, apollo]`).
+
+### Rate limits and the per-run cap
+
+- `max_urls_per_run` (20) counts the URLs left after removing ones already in the `Contacts` tab and in-input duplicates. More than that → an error, nothing looked up, exit 1. Split the file and run again.
+- Prospeo's limits are 1/s, 20/min and 50/day. Calls are spaced `prospeo.min_interval_seconds` (3.1 s) apart, so a 20-URL Prospeo pass takes about a minute. Hitting the 50/day limit returns 429, which stops the run (see below).
+
+### Output
+
+Log lines go to stderr with a timestamp, level and logger name:
+
+- `<provider>: looking up N URL(s)` before each provider runs.
+- `STOP <provider>: <message>` when a provider error stops the run. The message is only the provider, the HTTP status or error code, or the exception type.
+- `DRAFT failed for <url>: <error type>; connection note left blank` for one failed draft.
+- `DRAFT stopped: <error type>; remaining connection notes left blank` on an Anthropic authentication or permission error.
+
+On stdout, after `Writing to sheet: <title>`, there is one line per input URL, in input order:
+
+| Line | Meaning |
+|---|---|
+| `ignored <url part> (not a profile URL)` | The line's URL part (never its trailing note) is not a `linkedin.com/in/<slug>` URL; not looked up, not written |
+| `duplicate <url>` | Same profile earlier in this input; not looked up again |
+| `<url> exists` | Already in the `Contacts` tab; not looked up, not written |
+| `<url> found via <provider> <status>` | Email found; row written |
+| `<url> not found` | No provider found an email; row written with a blank email, so it is never looked up again |
+| `<url> pending` | Not resolved because a provider stopped the run; not written |
+
+Then one summary line, for example:
+
+```text
+input 5, ignored 1, duplicate 1, skipped existing 1, found prospeo 1, found apify 0, not found 1, pending 0
+```
+
+Emails, names and drafted notes are never printed.
+
+### Exit codes and reruns
+
+- **0**: every URL was resolved. Not-found rows and single failed drafts still exit 0.
+- **1**: missing env vars, unreadable settings or bad `providers`, a missing input file, a missing `config/candidate.md` with `--draft`, a missing `Contacts` header or too many URLs (one plain error line, nothing looked up); a provider `STOP` (resolved rows are appended, `pending` URLs are not written); an Anthropic authentication or permission error while drafting (all rows are appended, the remaining `outreach_line`s stay blank); any other fatal error.
+
+To retry `pending` URLs, rerun the same command: rows written last time now print `exists`, so only the pending URLs are looked up, starting from the first provider again.
+
+### Rows and drafts
+
+Rows are append-only: the code never edits a row it wrote. One consequence is that `--draft` only drafts notes for people found in that run; a contact already in the sheet prints `exists` and gets no draft. A failed draft leaves that row's `outreach_line` blank with a `DRAFT failed` warning, and the row is still written. What goes into a note is described under [`email_finder/settings.yaml`](#email_findersettingsyaml-committed).
 
 ## GitHub Actions
 
@@ -342,7 +471,19 @@ Your match criteria and evaluation rules for the scorer. Personal scoring rules 
 
 A one-page evidence document the scorer reads alongside the profile. Copied from `config/candidate.example.md`. `email_finder --draft` also uses it as the only source of facts about you.
 
-### `email_finder/settings.yaml` (committed): `outreach`
+### `email_finder/settings.yaml` (committed)
+
+- `timezone`: `America/Chicago`; `date_found` is written in this zone.
+- `max_urls_per_run`: 20 lookups per run, counted after removing existing and duplicate URLs.
+- `providers`: `[prospeo, apify]`, run in this order (`apollo` available, paid plan only).
+- `prospeo.timeout_seconds`: 15 per call.
+- `prospeo.min_interval_seconds`: 3.1 between calls (limits 1/s, 20/min, 50/day).
+- `apify.actor_id`: `vulnv/linkedin-email-finder`.
+- `apify.timeout_seconds`: 300 for the one synchronous actor run.
+- `apollo.batch_size`: 10 URLs per `bulk_match` call.
+- `apollo.timeout_seconds`: 15 per call.
+- `apollo.min_interval_seconds`: 1.2 between batches.
+- `outreach.model`, `outreach.max_chars`, `outreach.max_tokens`: see below.
 
 `--draft` writes a LinkedIn connection note into each found row's `outreach_line`: plain text, one line, "Hi <first name>," and no sign-off. It uses the contact's first name, company and title, the row's `# note` from the input file (a role mentioned there gets referenced; no note → a networking note), `config/candidate.md`, and `config/outreach_examples.md` if present. The note never mentions visa, sponsorship, phone numbers, email addresses or salary.
 
@@ -353,6 +494,10 @@ A one-page evidence document the scorer reads alongside the profile. Copied from
 ### `config/outreach_examples.md` (gitignored, optional)
 
 Example connection notes, used for style only (the drafter is told not to copy them). Copied from `config/outreach_examples.example.md`. A missing file is not an error.
+
+### `email_finder/linkedin-profiles.txt` (gitignored)
+
+The default `email_finder` input: one LinkedIn profile URL per line with an optional trailing `# note`. Copied from `email_finder/linkedin-profiles.example.txt`; format in [Input file format](#input-file-format).
 
 ## Costs
 
@@ -375,6 +520,13 @@ Newer models' tokenizers count more tokens for the same text than older ones, so
 Each query page is **1 Serper credit at `num=10`**. The ceiling is enabled queries × `max_pages_per_query` × 2 runs a day: 23 × 4 × 2 = 184 credits/day with the current config. Pagination stops early on empty pages, so typical spend is lower. The `QUERY total Serper calls` line reports the real count per run.
 
 ATS polling (Greenhouse, Lever, Ashby) uses free public APIs.
+
+### Email lookups
+
+- **Prospeo**: free plan, 100 credits/month; limits 1/s, 20/min, 50/day.
+- **Apify** (`vulnv/linkedin-email-finder`): about $0.026 per email found, paid from the $5/month free credit.
+- **Apollo**: paid plans only, and disabled in `providers`, so it costs nothing today.
+- **Drafts** (`--draft`): one `claude-sonnet-5-5` call per found person. Thinking tokens count as output tokens, but a note costs a few cents at most.
 
 ## Before every commit
 

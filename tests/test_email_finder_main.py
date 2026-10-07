@@ -1,6 +1,10 @@
+import logging
+
 import pytest
+import yaml
 
 from email_finder import main as main_module
+from email_finder import service, sheets_repo
 
 ENV = dict(
     SHEET_ID="sheet-123",
@@ -107,15 +111,90 @@ def test_service_exit_code_is_returned(env, capsys):
     assert "pending 0" in capsys.readouterr().out
 
 
-def test_exception_logged_exit_1(env, caplog):
+def _assert_one_plain_error(caplog, expected):
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(errors) == 1
+    assert expected in errors[0].getMessage()
+    assert errors[0].exc_info is None
+    assert "Traceback" not in caplog.text
+
+
+def test_unexpected_exception_logged_with_traceback_exit_1(env, caplog):
     env.setattr(main_module.sheets_repo, "get_sheet_title", lambda sheet_id: "T")
 
     def run(*args):
-        raise RuntimeError("Contacts tab header row is missing column(s): notes")
+        raise RuntimeError("boom")
 
     env.setattr(main_module.service, "run", run)
     assert main_module.main([]) == 1
-    assert "missing column(s): notes" in caplog.text
+    assert "Fatal error, run aborted" in caplog.text
+    assert any(r.exc_info for r in caplog.records)
+
+
+@pytest.mark.parametrize(
+    "error, expected",
+    [
+        (service.TooManyUrlsError("21 URLs to look up exceeds max_urls_per_run 20; nothing looked up"),
+         "exceeds max_urls_per_run 20"),
+        (sheets_repo.MissingHeadersError(["notes"]), "missing column(s): notes"),
+        (service.RunError("Could not read input file x.txt: FileNotFoundError"), "x.txt"),
+        (service.RunError("Invalid providers in settings.yaml: ['hunter']"), "hunter"),
+    ],
+)
+def test_expected_errors_are_one_plain_line_exit_1(env, caplog, error, expected):
+    env.setattr(main_module.sheets_repo, "get_sheet_title", lambda sheet_id: "T")
+
+    def run(*args):
+        raise error
+
+    env.setattr(main_module.service, "run", run)
+    assert main_module.main([]) == 1
+    _assert_one_plain_error(caplog, expected)
+
+
+def test_unreadable_settings_is_one_plain_line_exit_1(env, caplog):
+    def load_settings():
+        raise yaml.YAMLError("bad yaml")
+
+    env.setattr(main_module.service, "load_settings", load_settings)
+    _forbid_run(env)
+    assert main_module.main([]) == 1
+    _assert_one_plain_error(caplog, "email_finder/settings.yaml")
+
+
+def _real_run_without_sheet_or_providers(env):
+    env.setattr(main_module.sheets_repo, "get_sheet_title", lambda sheet_id: "T")
+
+    def boom(*args, **kwargs):
+        raise AssertionError("should not be called")
+
+    for target, name in (
+        (service.sheets_repo, "get_columns"), (service.sheets_repo, "get_existing_keys"),
+        (service.prospeo_client, "enrich_person"), (service.apify_client, "find_emails"),
+    ):
+        env.setattr(target, name, boom)
+
+
+def test_draft_with_missing_candidate_file_is_one_plain_line_no_lookups(env, caplog, tmp_path):
+    env.setenv("ANTHROPIC_API_KEY", "anthropic-secret")
+    env.setattr(service, "_CANDIDATE_PATH", tmp_path / "candidate.md")
+    _real_run_without_sheet_or_providers(env)
+
+    assert main_module.main(["https://linkedin.com/in/a", "--draft"]) == 1
+    _assert_one_plain_error(caplog, "candidate.md")
+
+
+def test_missing_input_file_is_one_plain_line_no_lookups(env, caplog, tmp_path):
+    _real_run_without_sheet_or_providers(env)
+    assert main_module.main(["--file", str(tmp_path / "nope.txt")]) == 1
+    _assert_one_plain_error(caplog, "nope.txt")
+
+
+def test_draft_help_says_connection_note(env, capsys):
+    with pytest.raises(SystemExit):
+        main_module.main(["--help"])
+    out = " ".join(capsys.readouterr().out.split())
+    assert "connection note" in out and "outreach line" not in out
 
 
 def test_keys_never_printed(env, capsys, caplog):

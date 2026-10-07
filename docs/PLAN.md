@@ -569,7 +569,7 @@ Built after Task 8; DESIGN.md has the details.
 - CLI: `python -m email_finder.main [urls ...] [--file PATH] [--draft]`.
 - No URLs and no `--file` → read `email_finder/linkedin-profiles.txt` (gitignored; copy from `linkedin-profiles.example.txt`).
 - File format: one URL per line; blank lines and lines starting with `#` are ignored; an optional trailing `# note` on a URL line goes into the `notes` column.
-- Every URL is normalized with `shared/linkedin_url.normalize_linkedin_url` (extra path after `/in/<slug>` is trimmed, so `/in/x/details/experience/` → `https://linkedin.com/in/x`); only `/in/<slug>` profile URLs are kept (`/pub/` and anything else prints `ignored <line> (not a profile URL)`). Dedup within the input (later copies print `duplicate <url>`) and against the Contacts tab's `linkedin_url` column (prints `<url> exists`).
+- Every URL is normalized with `shared/linkedin_url.normalize_linkedin_url` (extra path after `/in/<slug>` is trimmed, so `/in/x/details/experience/` → `https://linkedin.com/in/x`); only `/in/<slug>` profile URLs are kept (`/pub/` and anything else prints `ignored <url part> (not a profile URL)`, the line's URL part, never its trailing note). Dedup within the input (later copies print `duplicate <url>`) and against the Contacts tab's `linkedin_url` column (prints `<url> exists`).
 - `max_urls_per_run` (20) counts the URLs left **after** removing existing and in-input duplicates. More than that → exit 1 before any provider call.
 
 **Sheet target**: email_finder runs only locally, so it writes to the TEST sheet from `.env` by default. Real use: `SHEET_ID=<prod id> python -m email_finder.main ...`. The `Writing to sheet: <title>` line shows which sheet was hit.
@@ -627,8 +627,10 @@ Built after Task 8; DESIGN.md has the details.
 `main.py`:
 - `load_dotenv()`, then check env before any work: `SHEET_ID`, `GOOGLE_APPLICATION_CREDENTIALS`, plus the key of each **enabled** provider only (`PROSPEO_API_KEY`, `APIFY_TOKEN`, `APOLLO_API_KEY`); `ANTHROPIC_API_KEY` only with `--draft`. One error naming every missing variable, exit 1.
 - Prints `Writing to sheet: <title>` first.
-- One line per input line: `ignored <line> (not a profile URL)`, `duplicate <url>`, or the URL + outcome (`exists` / `found via <provider> <status>` / `not found` / `pending`). Never prints emails, names or keys.
-- Ends with a summary line: input, ignored, duplicate, skipped existing, found per provider, not found, pending. Any exception → logged, exit 1.
+- Log lines (stderr, from service): `<provider>: looking up N URL(s)` before each provider runs, and `STOP <provider>: <message>` when a provider error stops the run (message = provider + HTTP status / error code, or the exception type).
+- One line per input line: `ignored <url part> (not a profile URL)` (never the trailing note), `duplicate <url>`, or the URL + outcome (`exists` / `found via <provider> <status>` / `not found` / `pending`). Never prints emails, names or keys.
+- Ends with a summary line: input, ignored, duplicate, skipped existing, found per provider, not found, pending.
+- Expected errors (unreadable settings, invalid `providers`, a missing input file, a missing or unreadable `config/candidate.md` with `--draft`, a missing Contacts header, too many URLs) → one plain error line, no traceback, exit 1, no lookups. `--draft` reads `config/candidate.md` and the optional examples file before any sheet or provider call. Any other exception → logged with a traceback, exit 1.
 
 **Fixtures** (scrub every name, email, phone, URL, domain and company to fake values; keep structure):
 - `prospeo_enrich_match.json`, `prospeo_enrich_nomatch.json`, `apify_match.json`, `apify_nomatch.json` — from `_scratch/*`.
@@ -751,6 +753,8 @@ SHEET_ID=<prod id> python _scratch/import_legacy_contacts.py --apply
 cat README.md
 ```
 **Expected**: A reader with the right API keys can go from clone to a working `--max-jobs 2` run by following the README alone.
+
+**After Task 9**: added the README "Email finder" section (setup, input format, commands, providers, limits, output lines, exit codes, reruns, drafts) plus email_finder rows in the cheat sheet, config files and costs.
 
 ---
 

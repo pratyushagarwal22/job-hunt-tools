@@ -441,11 +441,32 @@ def test_cap_exceeded_raises_before_any_lookup(monkeypatch, tmp_path):
     assert h.appends == []
 
 
+def test_cap_exceeded_is_an_expected_run_error(monkeypatch, tmp_path):
+    h = Harness(monkeypatch, tmp_path, settings={"max_urls_per_run": 1})
+    with pytest.raises(service.RunError):
+        h.run([A, B])
+
+
 def test_unknown_provider_raises_before_any_lookup(monkeypatch, tmp_path):
     h = Harness(monkeypatch, tmp_path, settings={"providers": ["prospeo", "hunter"]})
-    with pytest.raises(ValueError, match="hunter"):
+    with pytest.raises(service.RunError, match="hunter"):
         h.run([A])
     assert h.calls("prospeo") == []
+
+
+def test_missing_input_file_is_a_run_error_naming_it(monkeypatch, tmp_path):
+    h = Harness(monkeypatch, tmp_path)
+    missing = tmp_path / "nope.txt"
+    with pytest.raises(service.RunError, match="nope.txt"):
+        h.run(file_path=str(missing))
+    assert h.events == []
+
+
+def test_missing_default_input_file_is_a_run_error_naming_it(monkeypatch, tmp_path):
+    h = Harness(monkeypatch, tmp_path)
+    with pytest.raises(service.RunError, match="linkedin-profiles.txt"):
+        h.run()
+    assert h.events == []
 
 
 # --- drafting ----------------------------------------------------------------------------
@@ -503,6 +524,34 @@ def test_missing_examples_file_means_no_examples_and_no_error(monkeypatch, tmp_p
     assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
 
+def test_draft_with_missing_candidate_file_fails_before_any_sheet_or_provider_call(
+    monkeypatch, tmp_path
+):
+    h = Harness(monkeypatch, tmp_path, prospeo={A: _match("a")})
+    monkeypatch.setattr(service, "_CANDIDATE_PATH", tmp_path / "missing" / "candidate.md")
+
+    with pytest.raises(service.RunError, match="candidate.md"):
+        h.run([A], draft=True)
+
+    assert h.events == [] and h.drafts == [] and h.appends == []
+
+
+def test_draft_with_unreadable_examples_file_fails_before_any_lookup(monkeypatch, tmp_path):
+    h = Harness(monkeypatch, tmp_path, prospeo={A: _match("a")})
+    h.examples_file.mkdir()
+
+    with pytest.raises(service.RunError, match="outreach_examples.md"):
+        h.run([A], draft=True)
+
+    assert h.events == []
+
+
+def test_candidate_file_not_needed_without_draft(monkeypatch, tmp_path):
+    h = Harness(monkeypatch, tmp_path, prospeo={A: _match("a")})
+    monkeypatch.setattr(service, "_CANDIDATE_PATH", tmp_path / "missing" / "candidate.md")
+    assert h.run([A])["exit_code"] == 0
+
+
 def test_first_name_is_blank_when_name_is_blank(monkeypatch, tmp_path):
     h = Harness(monkeypatch, tmp_path, prospeo={A: {**_match("a"), "name": ""}})
     h.run([A], draft=True)
@@ -535,6 +584,8 @@ def test_client_draft_failure_leaves_line_blank_and_warns(monkeypatch, tmp_path,
     assert h.rows_by_url()[A]["outreach_line"] == ""
     warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert len(warnings) == 1 and "ValueError" in warnings[0].getMessage()
+    assert "connection note left blank" in warnings[0].getMessage()
+    assert "outreach line" not in warnings[0].getMessage()
 
 
 def test_committed_outreach_settings():
@@ -568,7 +619,7 @@ def test_draft_failure_leaves_line_blank_warns_and_continues(monkeypatch, tmp_pa
     [(anthropic.AuthenticationError, 401), (anthropic.PermissionDeniedError, 403)],
 )
 def test_anthropic_auth_error_stops_drafting_appends_all_rows_exit_1(
-    monkeypatch, tmp_path, cls, status
+    monkeypatch, tmp_path, caplog, cls, status
 ):
     def draft(**kw):
         raise _auth_error(cls, status)
@@ -580,6 +631,7 @@ def test_anthropic_auth_error_stops_drafting_appends_all_rows_exit_1(
     result = h.run([A, B, C], draft=True)
 
     assert result["exit_code"] == 1
+    assert "remaining connection notes left blank" in caplog.text
     assert len(h.drafts) == 1
     rows = h.rows_by_url()
     assert list(rows) == [A, B, C]
