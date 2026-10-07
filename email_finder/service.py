@@ -29,6 +29,8 @@ logger = logging.getLogger(__name__)
 
 _PACKAGE_DIR = Path(__file__).parent
 _CANDIDATE_PATH = _PACKAGE_DIR.parent / "config" / "candidate.md"
+_EXAMPLES_PATH = _PACKAGE_DIR.parent / "config" / "outreach_examples.md"
+DEFAULT_MAX_CHARS = 200
 DEFAULT_INPUT = _PACKAGE_DIR / "linkedin-profiles.txt"
 
 PROVIDER_ENV_VARS = {
@@ -142,16 +144,25 @@ def _run_chain(urls: list[str], settings: dict, sleep) -> tuple[dict, list[str],
     return found, remaining, [], False
 
 
-def _draft_lines(found: dict, settings: dict) -> tuple[dict[str, str], bool]:
+def _first_name(name: str) -> str:
+    parts = (name or "").split()
+    return parts[0] if parts else ""
+
+
+def _draft_lines(found: dict, notes: dict, settings: dict) -> tuple[dict[str, str], bool]:
     """Returns ({url: outreach_line}, auth_failed)."""
     cfg = settings["outreach"]
     candidate_md = _CANDIDATE_PATH.read_text()
+    examples_md = _EXAMPLES_PATH.read_text() if _EXAMPLES_PATH.is_file() else ""
     lines = {}
     for url, (_, match) in found.items():
         try:
             lines[url] = outreach_client.draft_outreach(
-                name=match["name"], company=match["company"], title=match["title"],
-                candidate_md=candidate_md, model=cfg["model"], max_tokens=cfg["max_tokens"],
+                first_name=_first_name(match["name"]), company=match["company"],
+                title=match["title"], notes=notes.get(url, ""),
+                candidate_md=candidate_md, examples_md=examples_md,
+                model=cfg["model"], max_tokens=cfg["max_tokens"],
+                max_chars=cfg.get("max_chars", DEFAULT_MAX_CHARS),
             )
         except (anthropic.AuthenticationError, anthropic.PermissionDeniedError) as err:
             logger.error("DRAFT stopped: %s; remaining outreach lines left blank", type(err).__name__)
@@ -205,7 +216,7 @@ def run(urls: list[str], file_path: str | None, draft: bool, sleep=time.sleep) -
         _run_chain(to_look_up, settings, sleep) if to_look_up else ({}, [], [], False)
     )
 
-    outreach, draft_auth_failed = _draft_lines(found, settings) if draft and found else ({}, False)
+    outreach, draft_auth_failed = _draft_lines(found, notes, settings) if draft and found else ({}, False)
 
     date_found = _now(settings["timezone"]).strftime("%Y-%m-%d %H:%M")
     not_found_set = set(not_found)

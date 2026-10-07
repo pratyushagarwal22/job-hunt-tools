@@ -2,7 +2,7 @@
 
 ## What this does
 
-Two small Python tools that feed one Google Sheet. **`job_scanner`** (live) runs twice a day on GitHub Actions: it polls tracked company boards on Greenhouse, Lever and Ashby, runs `site:` searches through the Serper API, dedups against the sheet, drops jobs by title, location and required years of experience, scores the rest with Claude against your profile, and appends the scored rows to the sheet's `Jobs` tab. **`email_finder`** (planned, not built yet) will be a manual CLI that takes LinkedIn profile URLs (arguments or `email_finder/linkedin-profiles.txt`), looks up each email through Prospeo and then Apify for Prospeo's misses (Apollo is supported but disabled; its API needs a paid plan), optionally drafts an outreach line, and appends one row per URL to the `Contacts` tab.
+Two small Python tools that feed one Google Sheet. **`job_scanner`** (live) runs twice a day on GitHub Actions: it polls tracked company boards on Greenhouse, Lever and Ashby, runs `site:` searches through the Serper API, dedups against the sheet, drops jobs by title, location and required years of experience, scores the rest with Claude against your profile, and appends the scored rows to the sheet's `Jobs` tab. **`email_finder`** (planned, not built yet) will be a manual CLI that takes LinkedIn profile URLs (arguments or `email_finder/linkedin-profiles.txt`), looks up each email through Prospeo and then Apify for Prospeo's misses (Apollo is supported but disabled; its API needs a paid plan), optionally drafts a LinkedIn connection note (`outreach_line`), and appends one row per URL to the `Contacts` tab.
 
 All commands below are run from the repo root with the virtual environment active.
 
@@ -72,6 +72,14 @@ cp config/candidate.example.md config/candidate.md
 ```
 
 Edit both. `config/profile.yaml` holds your match criteria and evaluation rules; `config/candidate.md` is a one-page evidence document for the scorer. Both are gitignored.
+
+Optional, for `email_finder --draft`: example LinkedIn connection notes in your own voice.
+
+```bash
+cp config/outreach_examples.example.md config/outreach_examples.md
+```
+
+It is gitignored. Without it, notes are drafted with no examples.
 
 ### 4. Google service account
 
@@ -332,7 +340,19 @@ Your match criteria and evaluation rules for the scorer. Personal scoring rules 
 
 ### `config/candidate.md` (gitignored)
 
-A one-page evidence document the scorer reads alongside the profile. Copied from `config/candidate.example.md`.
+A one-page evidence document the scorer reads alongside the profile. Copied from `config/candidate.example.md`. `email_finder --draft` also uses it as the only source of facts about you.
+
+### `email_finder/settings.yaml` (committed): `outreach`
+
+`--draft` writes a LinkedIn connection note into each found row's `outreach_line`: plain text, one line, "Hi <first name>," and no sign-off. It uses the contact's first name, company and title, the row's `# note` from the input file (a role mentioned there gets referenced; no note → a networking note), `config/candidate.md`, and `config/outreach_examples.md` if present. The note never mentions visa, sponsorship, phone numbers, email addresses or salary.
+
+- `model`: `claude-sonnet-5-5`.
+- `max_chars`: note length limit (200). A longer reply is trimmed at the last sentence end within the limit; if no sentence ends within it, `outreach_line` stays blank and a warning is logged.
+- `max_tokens`: 4096. Thinking tokens count against it, so a 200-character note never hits it; a reply that does hit it is a draft failure (blank + warning), never a cut-off note.
+
+### `config/outreach_examples.md` (gitignored, optional)
+
+Example connection notes, used for style only (the drafter is told not to copy them). Copied from `config/outreach_examples.example.md`. A missing file is not an error.
 
 ## Costs
 
@@ -361,10 +381,10 @@ ATS polling (Greenhouse, Lever, Ashby) uses free public APIs.
 Confirm every secret and personal path is ignored:
 
 ```bash
-git check-ignore -v .env service_account.json config/profile.yaml config/candidate.md _legacy _scratch docs/PROJECT_CONTEXT.md .venv email_finder/linkedin-profiles.txt
+git check-ignore -v .env service_account.json config/profile.yaml config/candidate.md config/outreach_examples.md _legacy _scratch docs/PROJECT_CONTEXT.md .venv email_finder/linkedin-profiles.txt
 ```
 
-Expect **9 lines**, one `.gitignore` rule per path. A missing line means that path is not ignored; fix `.gitignore` before committing.
+Expect **10 lines**, one `.gitignore` rule per path. A missing line means that path is not ignored; fix `.gitignore` before committing.
 
 Then review exactly what will be committed:
 
@@ -379,6 +399,7 @@ These must never appear in `git status` or a commit:
 - any `*.json.b64` file
 - `config/profile.yaml`
 - `config/candidate.md`
+- `config/outreach_examples.md`
 - `docs/PROJECT_CONTEXT.md`
 - anything under `_legacy/`
 - anything under `_scratch/`

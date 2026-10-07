@@ -537,7 +537,7 @@ Built after Task 8; DESIGN.md has the details.
 
 ## Task 9: email_finder (Prospeo → Apify chain + Outreach + CLI)
 
-**Goal**: Build the email_finder module: a batch CLI that takes LinkedIn profile URLs, looks each one up through an ordered chain of email providers (Prospeo, then Apify; Apollo available but disabled), optionally drafts an outreach line with Claude, and appends one row per URL to the Contacts tab.
+**Goal**: Build the email_finder module: a batch CLI that takes LinkedIn profile URLs, looks each one up through an ordered chain of email providers (Prospeo, then Apify; Apollo available but disabled), optionally drafts a LinkedIn connection note with Claude (stored in `outreach_line`), and appends one row per URL to the Contacts tab.
 
 **Provider facts** (from real tests, Oct 5 2026; details in docs/DESIGN.md "Data Flow — email_finder"):
 - **Prospeo** (free, 100 credits/month; enrich limits 1/s, 20/min, 50/day): `POST https://api.prospeo.io/enrich-person`, header `X-KEY`, body `{"data": {"linkedin_url": ...}}`. Match (`error: false`): email at `person.email.email`, status at `person.email.status`, name at `person.full_name`, title at `person.current_job_title`, company at `company.name`. No match: `{"error": true, "error_code": "NO_MATCH"}`, or a match whose email is not revealed (`person.email.revealed` false, or an email containing `*`, i.e. masked). The match response also carries a `person.mobile` object; it is never read or stored (and is scrubbed in fixtures).
@@ -559,6 +559,7 @@ Built after Task 8; DESIGN.md has the details.
 - `email_finder/input_file.py` (new — input line parsing: comments, blanks, trailing `# note`)
 - `email_finder/service.py` (new)
 - `email_finder/main.py` (new)
+- `config/outreach_examples.example.md` (new, committed, generic examples only; the real `config/outreach_examples.md` is gitignored and optional)
 - `tests/test_linkedin_url.py`, `tests/test_shared_sheets.py`, `tests/test_prospeo_client.py`, `tests/test_apify_client.py`, `tests/test_apollo_client.py`, `tests/test_outreach_client.py`, `tests/test_email_finder_sheets_repo.py`, `tests/test_email_finder_input.py`, `tests/test_email_finder_service.py`, `tests/test_email_finder_main.py` (new)
 - `tests/fixtures/prospeo_enrich_match.json`, `prospeo_enrich_nomatch.json`, `apify_match.json`, `apify_nomatch.json`, `apollo_403.json`, `apollo_bulk_match.json`, `outreach_response.json` (new, scrubbed — see Fixtures)
 
@@ -587,7 +588,7 @@ Built after Task 8; DESIGN.md has the details.
 - Apify items with `found: true` but a blank email, a non-boolean `found`, or a missing/blank `linkedin_url` are errors (malformed body).
 - Error messages carry only the provider name and HTTP status / error code, never the response body (it can hold personal data) and never the key.
 - **Anything else** (non-2xx, other error codes, 401/403/429, timeout, malformed body, an Apify item missing for a submitted URL) → stop the whole run: append the rows already resolved (found + not found), do **not** write the unresolved URLs (they are retried next run), print which URLs are pending, exit 1.
-- **`--draft` failures**: a failed Claude call → that row is written with a blank `outreach_line` and a warning (no name or email in it); the run continues. An Anthropic authentication / permission error → stop drafting, still append all rows (remaining `outreach_line`s blank), exit 1.
+- **`--draft` failures**: a failed Claude call, a `max_tokens` stop, or a note longer than `outreach.max_chars` with no sentence end within the limit → that row is written with a blank `outreach_line` and a warning (no name or email in it); the run continues. An Anthropic authentication / permission error → stop drafting, still append all rows (remaining `outreach_line`s blank), exit 1.
 
 **What each module exposes**:
 
@@ -605,7 +606,10 @@ Built after Task 8; DESIGN.md has the details.
 - Apollo: `bulk_match(linkedin_urls, timeout)` → returned records keyed by normalized `linkedin_url` (a submitted URL with no record = no-match; `null` entries and records with a blank email or URL are skipped, so they are no-matches too); `email_status` lowercased; body sets `reveal_personal_emails: false` and `reveal_phone_number: false` explicitly.
 
 `outreach_client.py`:
-- `draft_outreach(name, company, title, candidate_md, model, max_tokens) -> str` — one Claude call per found row. `model` / `max_tokens` from `outreach` in settings, passed in by service. Uses `config/candidate.md`. The prompt and the drafted line are never logged. Errors propagate; service applies the `--draft` failure rules above.
+- `draft_outreach(first_name, company, title, notes, candidate_md, examples_md, model, max_tokens, max_chars) -> str` — one Claude call per found row, returning a **LinkedIn connection note**: plain text, one line (whitespace collapsed), "Hi <first name>," on the same line, no sign-off. `model` / `max_tokens` / `max_chars` from `outreach` in settings, passed in by service. Inputs: the first word of the contact's name, company, title, the row's `# note` text (may be empty), `config/candidate.md`, and `config/outreach_examples.md` (missing file → no examples, no error). Notes given → reference the role if they mention one; no notes → a networking note.
+- Prompt rules: at most `max_chars` characters; use only facts from candidate.md; never invent facts about the person or company beyond the given fields; never mention visa, sponsorship, phone numbers, email addresses or salary; examples are for style only, not to copy.
+- Length rule: a reply longer than `max_chars` is trimmed at the last sentence end (`.`, `!` or `?` followed by a space or the end) within the limit; no sentence end within it → `ValueError`. `stop_reason` `max_tokens` → `ValueError` (never a cut-off note). Thinking blocks are ignored.
+- The prompt and the drafted note are never logged, and error messages never contain the note. Errors propagate; service applies the `--draft` failure rules above.
 
 `sheets_repo.py` (email_finder's, header-driven like Jobs):
 - `CONTACTS_HEADERS = (contacted, name, company, title, email, email_status, email_source, linkedin_url, notes, outreach_line, date_found)`.
@@ -618,7 +622,7 @@ Built after Task 8; DESIGN.md has the details.
 - Reads input, normalizes, dedups, enforces the cap, runs the provider chain, drafts outreach (`--draft`), builds row dicts, and does **one append at the end** (or at the stop, per Errors). `email_source` = provider name (`prospeo` / `apify` / `apollo`), blank for not-found rows. `date_found` = `YYYY-MM-DD HH:MM` in `timezone`, formatted inline with `zoneinfo` (no `job_scanner.date_utils`).
 
 `email_finder/settings.yaml`:
-- `timezone`, `max_urls_per_run` (20), `providers` (`[prospeo, apify]`), `prospeo.timeout_seconds` (15), `prospeo.min_interval_seconds` (3.1), `apify.actor_id` (`vulnv/linkedin-email-finder`), `apify.timeout_seconds` (300), `apollo.batch_size` (10), `apollo.timeout_seconds` (15), `apollo.min_interval_seconds` (1.2), `outreach.model` (`claude-sonnet-5-5`), `outreach.max_tokens` (300).
+- `timezone`, `max_urls_per_run` (20), `providers` (`[prospeo, apify]`), `prospeo.timeout_seconds` (15), `prospeo.min_interval_seconds` (3.1), `apify.actor_id` (`vulnv/linkedin-email-finder`), `apify.timeout_seconds` (300), `apollo.batch_size` (10), `apollo.timeout_seconds` (15), `apollo.min_interval_seconds` (1.2), `outreach.model` (`claude-sonnet-5-5`), `outreach.max_tokens` (4096: thinking tokens count against it, so a `max_chars` note never hits it), `outreach.max_chars` (200; 200 if the key is missing).
 
 `main.py`:
 - `load_dotenv()`, then check env before any work: `SHEET_ID`, `GOOGLE_APPLICATION_CREDENTIALS`, plus the key of each **enabled** provider only (`PROSPEO_API_KEY`, `APIFY_TOKEN`, `APOLLO_API_KEY`); `ANTHROPIC_API_KEY` only with `--draft`. One error naming every missing variable, exit 1.
@@ -637,7 +641,8 @@ Built after Task 8; DESIGN.md has the details.
 - Prospeo: a match with empty/null `person.email.email`, `person.email.revealed` false, or an email containing `*` is a no-match; `person.mobile` is never read.
 - Apify: exact `"No email found in response"` string is no-match; any other `found: false` error is an error; a missing item for a submitted URL stops the run.
 - Apollo: records mapped by normalized `linkedin_url`; a submitted URL with no record is a no-match.
-- Service: chain order (Prospeo no-matches go to Apify; matched URLs never reach the next provider); partial failure appends resolved rows, writes no pending URLs, reports them, exits 1; rate-limit spacing (patched `sleep`, `min_interval_seconds` between Prospeo calls and Apollo batches); cap counted after existing + duplicate removal, exceeded → exit before any lookup; `--draft` failure → blank `outreach_line` + warning, run continues; Anthropic auth/permission error → drafting stops, all rows appended, exit 1.
+- Service: chain order (Prospeo no-matches go to Apify; matched URLs never reach the next provider); partial failure appends resolved rows, writes no pending URLs, reports them, exits 1; rate-limit spacing (patched `sleep`, `min_interval_seconds` between Prospeo calls and Apollo batches); cap counted after existing + duplicate removal, exceeded → exit before any lookup; `--draft` failure → blank `outreach_line` + warning, run continues; Anthropic auth/permission error → drafting stops, all rows appended, exit 1; each row's notes and the examples file reach the drafter; a missing examples file is not an error.
+- Outreach client: trim at the last sentence end within `max_chars`; too long with no sentence end → error (blank + warning in service); `max_tokens` stop → error; notes, examples and the prompt rules reach the call; nothing logged.
 - Input file parsing: `#` lines and blanks ignored, trailing `# note` → `notes`, non-`/in/` lines reported as `ignored`, in-input dupes reported as `duplicate`, sheet dupes as `exists`; summary counts match.
 - Contacts repo: missing header is fatal and writes nothing; rows land in the right columns by header name; `get_existing_keys` returns normalized URLs and lowercase emails, blanks skipped.
 - `linkedin_url`: lowercase, https, `www.` and other `linkedin.com` subdomains (`uk.`, `m.`) collapsed, trailing slash, query param removal, extra path after `/in/<slug>` trimmed (`/pub/` untouched); two variant URLs for the same profile normalize to the same string.
@@ -663,8 +668,8 @@ python -m email_finder.main --file /tmp/two-profiles.txt
 
 # 4. One live --draft on a third real profile URL (not in /tmp/two-profiles.txt; no rows deleted)
 python -m email_finder.main "<a third real profile URL>" --draft
-# Expected: "found via <provider> <status>"; the new row has a non-blank outreach_line;
-# the drafted line is not printed.
+# Expected: "found via <provider> <status>"; the new row has a non-blank outreach_line:
+# one line, at most outreach.max_chars, ending at a sentence end; the note is not printed.
 ```
 
 Real use after verification: `SHEET_ID=<prod id> python -m email_finder.main ...` (local `.env` always points at TEST).

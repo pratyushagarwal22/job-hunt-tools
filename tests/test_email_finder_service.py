@@ -22,7 +22,7 @@ SETTINGS = {
     "prospeo": {"timeout_seconds": 15, "min_interval_seconds": 3.1},
     "apify": {"actor_id": "vulnv/linkedin-email-finder", "timeout_seconds": 300},
     "apollo": {"batch_size": 10, "timeout_seconds": 15, "min_interval_seconds": 1.2},
-    "outreach": {"model": "claude-sonnet-5-5", "max_tokens": 300},
+    "outreach": {"model": "claude-sonnet-5-5", "max_tokens": 4096, "max_chars": 200},
 }
 
 NOW = datetime(2026, 10, 6, 21, 5, tzinfo=ZoneInfo("America/Chicago"))
@@ -55,7 +55,7 @@ class Harness:
         self.prospeo = prospeo or {}
         self.apify = apify or (lambda urls: {url: None for url in urls})
         self.apollo = apollo if apollo is not None else {}
-        self.draft = draft or (lambda **kw: f"line for {kw['name']}")
+        self.draft = draft or (lambda **kw: f"line for {kw['first_name']}")
         self.events = []
         self.appends = []
         self.drafts = []
@@ -63,10 +63,12 @@ class Harness:
 
         candidate = tmp_path / "candidate.md"
         candidate.write_text("CANDIDATE")
+        self.examples_file = tmp_path / "outreach_examples.md"
         self.default_file = tmp_path / "linkedin-profiles.txt"
 
         monkeypatch.setattr(service, "load_settings", lambda: self.settings)
         monkeypatch.setattr(service, "_CANDIDATE_PATH", candidate)
+        monkeypatch.setattr(service, "_EXAMPLES_PATH", self.examples_file)
         monkeypatch.setattr(service, "DEFAULT_INPUT", self.default_file)
         monkeypatch.setattr(service, "_now", lambda tz_name: NOW)
         monkeypatch.setenv("SHEET_ID", "sheet-1")
@@ -462,18 +464,89 @@ def test_draft_for_found_rows_only(monkeypatch, tmp_path):
 
     assert result["exit_code"] == 0
     assert h.drafts == [{
-        "name": "Person A", "company": "Company A", "title": "Title A",
-        "candidate_md": "CANDIDATE", "model": "claude-sonnet-5-5", "max_tokens": 300,
+        "first_name": "Person", "company": "Company A", "title": "Title A", "notes": "",
+        "candidate_md": "CANDIDATE", "examples_md": "", "model": "claude-sonnet-5-5",
+        "max_tokens": 4096, "max_chars": 200,
     }]
     rows = h.rows_by_url()
-    assert rows[A]["outreach_line"] == "line for Person A"
+    assert rows[A]["outreach_line"] == "line for Person"
     assert rows[B]["outreach_line"] == ""
     assert all("line for" not in line for line in result["lines"])
 
 
+def test_draft_gets_each_rows_notes(monkeypatch, tmp_path):
+    path = tmp_path / "in.txt"
+    path.write_text(f"{A}  # applied to Backend Engineer\n{B}\n")
+    h = Harness(monkeypatch, tmp_path, prospeo={A: _match("a"), B: _match("b")})
+
+    h.run(file_path=str(path), draft=True)
+
+    assert [d["notes"] for d in h.drafts] == ["applied to Backend Engineer", ""]
+
+
+def test_draft_reads_the_examples_file_when_present(monkeypatch, tmp_path):
+    h = Harness(monkeypatch, tmp_path, prospeo={A: _match("a")})
+    h.examples_file.write_text("EXAMPLES")
+    h.run([A], draft=True)
+    assert h.drafts[0]["examples_md"] == "EXAMPLES"
+
+
+def test_missing_examples_file_means_no_examples_and_no_error(monkeypatch, tmp_path, caplog):
+    h = Harness(monkeypatch, tmp_path, prospeo={A: _match("a")})
+    assert not h.examples_file.exists()
+
+    result = h.run([A], draft=True)
+
+    assert result["exit_code"] == 0
+    assert h.drafts[0]["examples_md"] == ""
+    assert h.rows_by_url()[A]["outreach_line"] == "line for Person"
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+def test_first_name_is_blank_when_name_is_blank(monkeypatch, tmp_path):
+    h = Harness(monkeypatch, tmp_path, prospeo={A: {**_match("a"), "name": ""}})
+    h.run([A], draft=True)
+    assert h.drafts[0]["first_name"] == ""
+
+
+def test_max_chars_defaults_to_200(monkeypatch, tmp_path):
+    h = Harness(
+        monkeypatch, tmp_path, prospeo={A: _match("a")},
+        settings={"outreach": {"model": "claude-sonnet-5-5", "max_tokens": 4096}},
+    )
+    h.run([A], draft=True)
+    assert h.drafts[0]["max_chars"] == 200
+
+
+@pytest.mark.parametrize(
+    "message",
+    ["Outreach draft hit max_tokens",
+     "Outreach draft over max_chars 200 with no sentence end within it"],
+)
+def test_client_draft_failure_leaves_line_blank_and_warns(monkeypatch, tmp_path, caplog, message):
+    def draft(**kw):
+        raise ValueError(message)
+
+    h = Harness(monkeypatch, tmp_path, prospeo={A: _match("a")}, draft=draft)
+
+    result = h.run([A], draft=True)
+
+    assert result["exit_code"] == 0
+    assert h.rows_by_url()[A]["outreach_line"] == ""
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1 and "ValueError" in warnings[0].getMessage()
+
+
+def test_committed_outreach_settings():
+    cfg = service.load_settings()["outreach"]
+    assert cfg["model"] == "claude-sonnet-5-5"
+    assert cfg["max_chars"] == 200
+    assert cfg["max_tokens"] >= 4096
+
+
 def test_draft_failure_leaves_line_blank_warns_and_continues(monkeypatch, tmp_path, caplog):
     def draft(**kw):
-        if kw["name"] == "Person A":
+        if kw["company"] == "Company A":
             raise anthropic.APIConnectionError(request=httpx2.Request("POST", "https://x"))
         return "drafted"
 
@@ -517,7 +590,7 @@ def test_drafting_still_runs_for_found_rows_after_a_provider_stop(monkeypatch, t
     h = Harness(monkeypatch, tmp_path, prospeo={A: _match("a"), B: RuntimeError("HTTP 429")})
     result = h.run([A, B], draft=True)
     assert result["exit_code"] == 1
-    assert h.rows_by_url()[A]["outreach_line"] == "line for Person A"
+    assert h.rows_by_url()[A]["outreach_line"] == "line for Person"
 
 
 # --- privacy -----------------------------------------------------------------------------

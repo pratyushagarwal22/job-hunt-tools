@@ -55,7 +55,7 @@ job-hunt-tools/
 │   ├── prospeo_client.py        # Prospeo enrich-person (provider 1)
 │   ├── apify_client.py          # Apify actor vulnv/linkedin-email-finder (provider 2)
 │   ├── apollo_client.py         # Apollo people/bulk_match (disabled; paid plan only)
-│   ├── outreach_client.py       # Claude outreach line drafting
+│   ├── outreach_client.py       # Claude LinkedIn connection note drafting
 │   ├── sheets_repo.py           # read/append Google Sheet (Contacts tab only; header-driven columns)
 │   ├── settings.yaml            # committed config (cap, provider order, rate limits, outreach model)
 │   ├── linkedin-profiles.txt    # input URLs, one per line (gitignored)
@@ -120,13 +120,13 @@ job-hunt-tools/
    - A no-match falls through to the next provider. Matched by none → row with blank `email`, `email_status` `"not found"`.
    - `email_status` is stored as the provider returns it, lowercased; Apify rows get `"unverified"`.
 7. **Errors**: only the no-match cases above count as no-match. Anything else (non-2xx, other error codes, 401/403/429, timeout, malformed body, an Apify item missing for a submitted URL) stops the run: append the rows already resolved, do **not** write the unresolved URLs (retried next run), print which URLs are pending, exit 1.
-8. `--draft` → one Claude call per found row (`outreach_client.py`, `outreach.model` / `outreach.max_tokens`), using `config/candidate.md`. Never logged. A failed call → that row gets a blank `outreach_line` and a warning; the run continues. An Anthropic authentication / permission error → drafting stops, all rows are still appended, exit 1.
+8. `--draft` → one Claude call per found row (`outreach_client.py`, `outreach.model` / `outreach.max_tokens` / `outreach.max_chars`) that writes a **LinkedIn connection note** into `outreach_line`: plain text, one line, "Hi <first name>," on the same line, no sign-off. Model input: the contact's first name, company and title, the row's `# note` text (may be empty), `config/candidate.md`, and `config/outreach_examples.md` if it exists (gitignored, optional; copy from `config/outreach_examples.example.md`; missing → no examples, no error). Notes that mention a role → the note references it; no notes → a networking note. Prompt rules: only facts from candidate.md; never invent facts about the person or company beyond the given fields; never mention visa, sponsorship, phone numbers, email addresses or salary; examples are for style, not to copy. **Length**: a reply longer than `max_chars` is trimmed at the last sentence end (`.`, `!` or `?` followed by a space or the end) within the limit; no sentence end within it → draft failure. `stop_reason` `max_tokens` → draft failure (never a cut-off note). Never logged. A failed draft → that row gets a blank `outreach_line` and a warning; the run continues. An Anthropic authentication / permission error → drafting stops, all rows are still appended, exit 1.
 9. Build row dicts: `email_source` = provider name; `contacted` blank; `date_found` = `YYYY-MM-DD HH:MM` in `timezone`, formatted inline with `zoneinfo`. **One append at the end** (or at the stop in step 7). Rows are written even when no email was found, to prevent re-lookups.
 10. **Output**: one line per input line — `ignored <line> (not a profile URL)`, `duplicate <url>`, or the URL + outcome (`exists` / `found via <provider> <status>` / `not found` / `pending`). Never print emails, names or keys. End with a summary line: input, ignored, duplicate, skipped existing, found per provider, not found, pending.
 
 **Clients** (`prospeo_client.py`, `apify_client.py`, `apollo_client.py`): one request per call, no retries, timeout passed in, never read settings. Keys only in headers (`X-KEY`, `Authorization: Bearer`, `x-api-key`), never in URLs or logs. Error messages carry only the provider name and HTTP status / error code, never the response body (it can hold personal data).
 
-**`email_finder/settings.yaml`**: `timezone`, `max_urls_per_run` (20), `providers`, `prospeo.timeout_seconds` (15), `prospeo.min_interval_seconds` (3.1), `apify.actor_id`, `apify.timeout_seconds` (300), `apollo.batch_size` (10), `apollo.timeout_seconds` (15), `apollo.min_interval_seconds` (1.2), `outreach.model` (`claude-sonnet-5-5`), `outreach.max_tokens` (300).
+**`email_finder/settings.yaml`**: `timezone`, `max_urls_per_run` (20), `providers`, `prospeo.timeout_seconds` (15), `prospeo.min_interval_seconds` (3.1), `apify.actor_id`, `apify.timeout_seconds` (300), `apollo.batch_size` (10), `apollo.timeout_seconds` (15), `apollo.min_interval_seconds` (1.2), `outreach.model` (`claude-sonnet-5-5`), `outreach.max_tokens` (4096; thinking tokens count against it, so a `max_chars` note never hits it), `outreach.max_chars` (200, also the default when the key is missing).
 
 **Legacy import** (Task 9b, one-off): `_scratch/import_legacy_contacts.py` (gitignored) copies old Apollo contacts from `_legacy/contacts-master-latest.json` into the Contacts tab with `email_source` `"apollo-legacy"`, using email_finder's Contacts repo. `email_status` = legacy `email_status`, else `email_confidence` (lowercased); `notes` joined with `"; "`; unparseable `contact_id` → blank `date_found`. Dedup key = normalized LinkedIn URL, else lowercase email (rows with an empty URL are imported); for duplicate keys the first row wins. Dry run by default, `--apply` to write.
 
@@ -180,7 +180,7 @@ Header-driven like Jobs: `CONTACTS_HEADERS` in `email_finder/sheets_repo.py` lis
 | email_source | String | Provider name: `prospeo` / `apify` / `apollo`; `apollo-legacy` for rows imported in Task 9b |
 | linkedin_url | String | Normalized input URL, used as dedup key (legacy rows may be blank; they dedup by lowercase email) |
 | notes | String | Optional trailing `# note` from the input file; for imported rows the legacy kind and `contacted YYYY-MM-DD`, joined with `"; "` |
-| outreach_line | String | Claude-drafted, blank if --draft not used |
+| outreach_line | String | Claude-drafted LinkedIn connection note (≤ `outreach.max_chars`), blank if --draft not used or the draft failed |
 | date_found | String | `YYYY-MM-DD HH:MM` (local time per `timezone` in `email_finder/settings.yaml`). |
 
 ## Scoring Rules

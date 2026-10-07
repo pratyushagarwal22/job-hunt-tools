@@ -22,6 +22,12 @@ apollo:
   timeout_seconds: 15
   min_interval_seconds: 1.2
 
+# --draft writes a LinkedIn connection note into outreach_line.
 outreach:
   model: claude-sonnet-5-5
-  max_tokens: 300
+  # Thinking tokens count against max_tokens; a 200-char note is ~60 text tokens, so this
+  # leaves room for thinking. A max_tokens stop is a draft failure (blank line + warning).
+  max_tokens: 4096
+  # Longer replies are trimmed at the last sentence end within the limit; no sentence end
+  # within it is a draft failure.
+  max_chars: 200
