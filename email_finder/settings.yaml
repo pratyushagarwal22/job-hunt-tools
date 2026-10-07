@@ -23,5 +23,5 @@ apollo:
   min_interval_seconds: 1.2
 
 outreach:
-  model: claude-opus-5-5
+  model: claude-sonnet-5-5
   max_tokens: 300

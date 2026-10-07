@@ -556,9 +556,10 @@ Built after Task 8; DESIGN.md has the details.
 - `email_finder/apollo_client.py` (new)
 - `email_finder/outreach_client.py` (new)
 - `email_finder/sheets_repo.py` (new)
+- `email_finder/input_file.py` (new — input line parsing: comments, blanks, trailing `# note`)
 - `email_finder/service.py` (new)
 - `email_finder/main.py` (new)
-- `tests/test_linkedin_url.py`, `tests/test_prospeo_client.py`, `tests/test_apify_client.py`, `tests/test_apollo_client.py`, `tests/test_outreach_client.py`, `tests/test_email_finder_sheets_repo.py`, `tests/test_email_finder_service.py` (new)
+- `tests/test_linkedin_url.py`, `tests/test_shared_sheets.py`, `tests/test_prospeo_client.py`, `tests/test_apify_client.py`, `tests/test_apollo_client.py`, `tests/test_outreach_client.py`, `tests/test_email_finder_sheets_repo.py`, `tests/test_email_finder_input.py`, `tests/test_email_finder_service.py`, `tests/test_email_finder_main.py` (new)
 - `tests/fixtures/prospeo_enrich_match.json`, `prospeo_enrich_nomatch.json`, `apify_match.json`, `apify_nomatch.json`, `apollo_403.json`, `apollo_bulk_match.json`, `outreach_response.json` (new, scrubbed — see Fixtures)
 
 **Out of scope**: No other job_scanner changes. No phone numbers from any provider. No LinkedIn scraping: our code never fetches LinkedIn pages; email providers receive the URL. No retry logic. No CI workflow for email_finder (manual CLI only). `email_finder` never imports from `job_scanner`.
@@ -567,7 +568,7 @@ Built after Task 8; DESIGN.md has the details.
 - CLI: `python -m email_finder.main [urls ...] [--file PATH] [--draft]`.
 - No URLs and no `--file` → read `email_finder/linkedin-profiles.txt` (gitignored; copy from `linkedin-profiles.example.txt`).
 - File format: one URL per line; blank lines and lines starting with `#` are ignored; an optional trailing `# note` on a URL line goes into the `notes` column.
-- Every URL is normalized with `shared/linkedin_url.normalize_linkedin_url`; only `/in/` profile URLs are kept (anything else prints `ignored <line> (not a profile URL)`). Dedup within the input (later copies print `duplicate <url>`) and against the Contacts tab's `linkedin_url` column (prints `<url> exists`).
+- Every URL is normalized with `shared/linkedin_url.normalize_linkedin_url` (extra path after `/in/<slug>` is trimmed, so `/in/x/details/experience/` → `https://linkedin.com/in/x`); only `/in/<slug>` profile URLs are kept (`/pub/` and anything else prints `ignored <line> (not a profile URL)`). Dedup within the input (later copies print `duplicate <url>`) and against the Contacts tab's `linkedin_url` column (prints `<url> exists`).
 - `max_urls_per_run` (20) counts the URLs left **after** removing existing and in-input duplicates. More than that → exit 1 before any provider call.
 
 **Sheet target**: email_finder runs only locally, so it writes to the TEST sheet from `.env` by default. Real use: `SHEET_ID=<prod id> python -m email_finder.main ...`. The `Writing to sheet: <title>` line shows which sheet was hit.
@@ -582,24 +583,26 @@ Built after Task 8; DESIGN.md has the details.
 - A URL matched by no provider → row with blank `email` and `email_status` `"not found"` (so the same person is never looked up twice).
 
 **Errors**:
-- **No-match** is only: Prospeo `error_code: NO_MATCH`, or a Prospeo match whose `person.email.email` is empty/null, whose `person.email.revealed` is false, or whose email contains `*` (masked); Apify `found: false` with `error` exactly `"No email found in response"`; Apollo no record returned for that URL. A no-match falls through to the next provider.
+- **No-match** is only: Prospeo `error_code: NO_MATCH` (at any HTTP status), or a Prospeo match whose `person.email` is null, whose `person.email.email` is empty/null, whose `person.email.revealed` is false (a missing `revealed` is not a no-match), or whose email contains `*` (masked); Apify `found: false` with `error` exactly `"No email found in response"`; Apollo no record returned for that URL (`null` entries and records with a blank email or URL count as no record). A no-match falls through to the next provider.
+- Apify items with `found: true` but a blank email, a non-boolean `found`, or a missing/blank `linkedin_url` are errors (malformed body).
+- Error messages carry only the provider name and HTTP status / error code, never the response body (it can hold personal data) and never the key.
 - **Anything else** (non-2xx, other error codes, 401/403/429, timeout, malformed body, an Apify item missing for a submitted URL) → stop the whole run: append the rows already resolved (found + not found), do **not** write the unresolved URLs (they are retried next run), print which URLs are pending, exit 1.
 - **`--draft` failures**: a failed Claude call → that row is written with a blank `outreach_line` and a warning (no name or email in it); the run continues. An Anthropic authentication / permission error → stop drafting, still append all rows (remaining `outreach_line`s blank), exit 1.
 
 **What each module exposes**:
 
 `shared/linkedin_url.py`:
-- `normalize_linkedin_url(url: str) -> str` — lowercase, strip `www.`, trailing slash, all query params and fragments. E.g. `https://www.LinkedIn.com/in/Jane-Doe/?utm_source=foo` → `https://linkedin.com/in/jane-doe`. Lives in `shared/` because email_finder must not import from job_scanner. Both input URLs and existing sheet URLs are normalized before comparison.
+- `normalize_linkedin_url(url: str) -> str` — always `https://` (scheme added if missing), any `linkedin.com` subdomain (`www.`, `uk.`, `m.`, …) → `linkedin.com`, lowercase, strip all query params, fragments and the trailing slash; on `linkedin.com`, any extra path after `/in/<slug>` (`/recent-activity/`, `/overlay/contact-info/`, `/details/experience/`, …) is trimmed to `https://linkedin.com/in/<slug>`. `/pub/` and other non-`/in/` paths are left as-is (the service then ignores them). E.g. `https://www.LinkedIn.com/in/Jane-Doe/?utm_source=foo` → `https://linkedin.com/in/jane-doe`. Lives in `shared/` because email_finder must not import from job_scanner. Both input URLs and existing sheet URLs are normalized before comparison.
 
 `shared/sheets.py` (moved in):
 - `header_positions(header_row: list) -> dict[str, int]` and `column_letter(index: int) -> str`, unchanged. `job_scanner/sheets_repo.py` imports them from here; its tests keep passing unchanged.
 
 `prospeo_client.py`, `apify_client.py`, `apollo_client.py`:
 - One request per call, no retries, timeout passed in. Clients never read `settings.yaml` (values passed in by service). API keys are read from env and sent **only in headers** (`X-KEY`, `Authorization: Bearer`, `x-api-key`), never in URLs, exception messages or logs.
-- Each client returns a match as `{name, company, title, email, email_status}` (fields a provider doesn't return are blank), returns "no match" for exactly the no-match cases above, and raises `RuntimeError` (provider name + HTTP status or error code, never the key) for everything else.
-- Prospeo: `enrich_person(linkedin_url, timeout)` → match or `None` (`None` for `NO_MATCH`, an empty/null `person.email.email`, `person.email.revealed` false, or an email containing `*`). Fields: `person.full_name`, `company.name`, `person.current_job_title`, `person.email.email`, `person.email.status` (lowercased).
-- Apify: `find_emails(urls, actor_id, timeout)` → one entry per returned item, keyed by the item's `linkedin_url`; `email_status` is `"unverified"` (Apify returns no status). Service maps entries to submitted URLs by normalized URL; a submitted URL with no item is an error.
-- Apollo: `bulk_match(linkedin_urls, timeout)` → returned records keyed by normalized `linkedin_url` (a submitted URL with no record = no-match); `email_status` lowercased; body sets `reveal_personal_emails: false` and never requests phone numbers.
+- Each client returns a match as `{name, company, title, email, email_status}` (fields a provider doesn't return are blank), returns "no match" for exactly the no-match cases above, and raises `RuntimeError` (provider name + HTTP status or error code only; never the key or the response body) for everything else.
+- Prospeo: `enrich_person(linkedin_url, timeout)` → match or `None` (`None` for `NO_MATCH` at any HTTP status, a null `person.email`, an empty/null `person.email.email`, `person.email.revealed` false, or an email containing `*`; a missing `revealed` is not a no-match). Fields: `person.full_name`, `company.name`, `person.current_job_title`, `person.email.email`, `person.email.status` (lowercased).
+- Apify: `find_emails(urls, actor_id, timeout)` → one entry per returned item, keyed by the item's `linkedin_url`; `email_status` is `"unverified"` (Apify returns no status). Service maps entries to submitted URLs by normalized URL; a submitted URL with no item is an error. An item with `found: true` and a blank email, a non-boolean `found`, or a missing `linkedin_url` is an error.
+- Apollo: `bulk_match(linkedin_urls, timeout)` → returned records keyed by normalized `linkedin_url` (a submitted URL with no record = no-match; `null` entries and records with a blank email or URL are skipped, so they are no-matches too); `email_status` lowercased; body sets `reveal_personal_emails: false` and `reveal_phone_number: false` explicitly.
 
 `outreach_client.py`:
 - `draft_outreach(name, company, title, candidate_md, model, max_tokens) -> str` — one Claude call per found row. `model` / `max_tokens` from `outreach` in settings, passed in by service. Uses `config/candidate.md`. The prompt and the drafted line are never logged. Errors propagate; service applies the `--draft` failure rules above.
@@ -615,7 +618,7 @@ Built after Task 8; DESIGN.md has the details.
 - Reads input, normalizes, dedups, enforces the cap, runs the provider chain, drafts outreach (`--draft`), builds row dicts, and does **one append at the end** (or at the stop, per Errors). `email_source` = provider name (`prospeo` / `apify` / `apollo`), blank for not-found rows. `date_found` = `YYYY-MM-DD HH:MM` in `timezone`, formatted inline with `zoneinfo` (no `job_scanner.date_utils`).
 
 `email_finder/settings.yaml`:
-- `timezone`, `max_urls_per_run` (20), `providers` (`[prospeo, apify]`), `prospeo.timeout_seconds` (15), `prospeo.min_interval_seconds` (3.1), `apify.actor_id` (`vulnv/linkedin-email-finder`), `apify.timeout_seconds` (300), `apollo.batch_size` (10), `apollo.timeout_seconds` (15), `apollo.min_interval_seconds` (1.2), `outreach.model`, `outreach.max_tokens`.
+- `timezone`, `max_urls_per_run` (20), `providers` (`[prospeo, apify]`), `prospeo.timeout_seconds` (15), `prospeo.min_interval_seconds` (3.1), `apify.actor_id` (`vulnv/linkedin-email-finder`), `apify.timeout_seconds` (300), `apollo.batch_size` (10), `apollo.timeout_seconds` (15), `apollo.min_interval_seconds` (1.2), `outreach.model` (`claude-sonnet-5-5`), `outreach.max_tokens` (300).
 
 `main.py`:
 - `load_dotenv()`, then check env before any work: `SHEET_ID`, `GOOGLE_APPLICATION_CREDENTIALS`, plus the key of each **enabled** provider only (`PROSPEO_API_KEY`, `APIFY_TOKEN`, `APOLLO_API_KEY`); `ANTHROPIC_API_KEY` only with `--draft`. One error naming every missing variable, exit 1.
@@ -637,7 +640,7 @@ Built after Task 8; DESIGN.md has the details.
 - Service: chain order (Prospeo no-matches go to Apify; matched URLs never reach the next provider); partial failure appends resolved rows, writes no pending URLs, reports them, exits 1; rate-limit spacing (patched `sleep`, `min_interval_seconds` between Prospeo calls and Apollo batches); cap counted after existing + duplicate removal, exceeded → exit before any lookup; `--draft` failure → blank `outreach_line` + warning, run continues; Anthropic auth/permission error → drafting stops, all rows appended, exit 1.
 - Input file parsing: `#` lines and blanks ignored, trailing `# note` → `notes`, non-`/in/` lines reported as `ignored`, in-input dupes reported as `duplicate`, sheet dupes as `exists`; summary counts match.
 - Contacts repo: missing header is fatal and writes nothing; rows land in the right columns by header name; `get_existing_keys` returns normalized URLs and lowercase emails, blanks skipped.
-- `linkedin_url`: lowercase, `www.` stripping, trailing slash, query param removal; two variant URLs for the same profile normalize to the same string.
+- `linkedin_url`: lowercase, https, `www.` and other `linkedin.com` subdomains (`uk.`, `m.`) collapsed, trailing slash, query param removal, extra path after `/in/<slug>` trimmed (`/pub/` untouched); two variant URLs for the same profile normalize to the same string.
 
 **Verification**:
 ```bash

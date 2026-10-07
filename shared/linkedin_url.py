@@ -4,9 +4,11 @@ from urllib.parse import urlsplit
 
 
 def normalize_linkedin_url(url: str) -> str:
-    """Lowercase, https, no `www.`, no query/fragment, no trailing slash.
+    """Lowercase, https, any linkedin.com subdomain -> linkedin.com, no query/fragment,
+    no trailing slash; on linkedin.com, extra path after /in/<slug> is dropped.
 
     `https://www.LinkedIn.com/in/Jane-Doe/?utm_source=foo` -> `https://linkedin.com/in/jane-doe`
+    `https://linkedin.com/in/jane-doe/details/experience/` -> `https://linkedin.com/in/jane-doe`
     """
     url = url.strip()
     if not url:
@@ -14,5 +16,12 @@ def normalize_linkedin_url(url: str) -> str:
     if "://" not in url:
         url = "https://" + url
     parts = urlsplit(url.lower())
-    host = parts.netloc.removeprefix("www.")
-    return f"https://{host}{parts.path.rstrip('/')}"
+    host = parts.netloc
+    if host.endswith(".linkedin.com"):
+        host = "linkedin.com"
+    path = parts.path.rstrip("/")
+    if host == "linkedin.com":
+        segments = path.split("/")
+        if len(segments) > 3 and segments[1] == "in" and segments[2]:
+            path = "/".join(segments[:3])
+    return f"https://{host}{path}"

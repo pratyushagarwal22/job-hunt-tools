@@ -1,0 +1,21 @@
+{
+  "_comment": "SYNTHETIC fixture: not a real Claude response. Anthropic Messages API shape with fake ids and a fake drafted line; no real names, companies or candidate details.",
+  "id": "msg_SYNTHETIC",
+  "content": [
+    {
+      "type": "text",
+      "text": "Hi Jane, I'm a new-grad software engineer who has shipped backend services in Python and would love to hear how the team at Example Corp approaches developer tooling.\n"
+    }
+  ],
+  "model": "claude-sonnet-5-5",
+  "role": "assistant",
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "type": "message",
+  "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 850,
+    "output_tokens": 45
+  }
+}
