@@ -693,28 +693,28 @@ Real use after verification: `SHEET_ID=<prod id> python -m email_finder.main ...
 - `name`, `company`, `title`, `email` — copied.
 - `linkedin_url` — normalized with `shared/linkedin_url.normalize_linkedin_url`.
 - `email_source` — `"apollo-legacy"`.
-- `email_status` — legacy `email_status` if present, else `email_confidence`, lowercased (same rule as the providers).
-- `notes` — the kind from legacy `notes` (`kind=RECRUITER|HIRING_MANAGER`) and `contacted YYYY-MM-DD` when `last_contacted_at` is set, joined with `"; "`.
+- `email_status` — legacy `email_confidence`, lowercased (blank if empty). Legacy `email_status` is not used (always empty).
+- `notes` — the kind (`recruiter` or `hiring manager`, from `kind=RECRUITER|HIRING_MANAGER` in legacy `notes`) and `emailed YYYY-MM-DD` from `last_email_sent_at` when set, joined with `"; "`. `last_contacted_at` is not used (the old pipeline set it on almost every row). Nothing else from legacy `notes` is copied (no `apollo_person_id`).
 - `contacted` — blank.
 - `date_found` — the date in `contact_id` (`CT-YYYYMMDD-…`) as `YYYY-MM-DD 00:00`; blank if `contact_id` doesn't parse.
 - `outreach_line` — blank.
 
 **Behavior**:
 - Uses email_finder's Contacts repo (`get_columns`, `get_existing_keys`, `append_contacts`) and the shared normalizer.
-- Dedup key = normalized LinkedIn URL, else lowercase email (rows with an empty URL are imported). Keys are compared against the Contacts tab and within the legacy file; for duplicate keys the first row is kept and the rest count as duplicates. Safe to rerun.
-- Dry run by default: prints counts only (rows, skipped no-email, skipped duplicate, to write). `--apply` appends all rows in one call.
-- Never prints names or emails.
+- Dedup: a row is skipped if its normalized LinkedIn URL OR its lowercase email was already seen, in the Contacts tab or earlier in the legacy file. First row wins. Safe to rerun.
+- Prints `Writing to sheet: <title>` first. Dry run by default: prints counts only (rows, skipped no-email, skipped duplicate in file, skipped existing in sheet, to write) and fails if rows ≠ the sum of the other four. `--apply` prints the same counts, then appends all rows in one call.
+- Never prints names, emails, URLs, companies, titles or notes. Expected errors (missing file, missing Contacts header) → one plain line, exit 1.
 
 **Verification**:
 ```bash
 # 1. Dry run on the TEST sheet
 python _scratch/import_legacy_contacts.py
-# Expected: rows / skipped no-email / skipped duplicate / to write counts; nothing written.
+# Expected: rows / skipped no-email / skipped duplicate in file / skipped existing in sheet / to write counts; nothing written.
 
 # 2. Apply on the TEST sheet, then rerun
 python _scratch/import_legacy_contacts.py --apply
 python _scratch/import_legacy_contacts.py
-# Expected: rows appended once; the rerun reports every row as a duplicate, "to write 0".
+# Expected: rows appended once; the rerun reports every row as skipped (existing in sheet or no-email), "to write 0".
 
 # 3. Production (only after the TEST sheet looks right)
 SHEET_ID=<prod id> python _scratch/import_legacy_contacts.py

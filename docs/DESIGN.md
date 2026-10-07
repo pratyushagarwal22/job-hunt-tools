@@ -130,7 +130,7 @@ job-hunt-tools/
 
 **`email_finder/settings.yaml`**: `timezone`, `max_urls_per_run` (20), `providers`, `prospeo.timeout_seconds` (15), `prospeo.min_interval_seconds` (3.1), `apify.actor_id`, `apify.timeout_seconds` (300), `apollo.batch_size` (10), `apollo.timeout_seconds` (15), `apollo.min_interval_seconds` (1.2), `outreach.model` (`claude-sonnet-5-5`), `outreach.max_tokens` (4096; thinking tokens count against it, so a `max_chars` note never hits it), `outreach.max_chars` (200, also the default when the key is missing).
 
-**Legacy import** (Task 9b, one-off): `_scratch/import_legacy_contacts.py` (gitignored) copies old Apollo contacts from `_legacy/contacts-master-latest.json` into the Contacts tab with `email_source` `"apollo-legacy"`, using email_finder's Contacts repo. `email_status` = legacy `email_status`, else `email_confidence` (lowercased); `notes` joined with `"; "`; unparseable `contact_id` → blank `date_found`. Dedup key = normalized LinkedIn URL, else lowercase email (rows with an empty URL are imported); for duplicate keys the first row wins. Dry run by default, `--apply` to write.
+**Legacy import** (Task 9b, one-off): `_scratch/import_legacy_contacts.py` (gitignored) copies old Apollo contacts from `_legacy/contacts-master-latest.json` into the Contacts tab with `email_source` `"apollo-legacy"`, using email_finder's Contacts repo. `email_status` = legacy `email_confidence`, lowercased (legacy `email_status` is always empty, not used); `notes` = kind (`recruiter` / `hiring manager`) and `emailed YYYY-MM-DD` from `last_email_sent_at`, joined with `"; "` (`last_contacted_at` and the rest of legacy `notes` are not copied); unparseable `contact_id` → blank `date_found`. A row is skipped if its normalized LinkedIn URL or its lowercase email was already seen (Contacts tab or earlier in the file); first row wins. Dry run by default, `--apply` to write.
 
 ## Sheet Schema
 
@@ -178,10 +178,10 @@ Header-driven like Jobs: `CONTACTS_HEADERS` in `email_finder/sheets_repo.py` lis
 | company | String | From the provider that matched (blank if not found) |
 | title | String | From the provider that matched; Apify returns no title, so blank for Apify rows |
 | email | String | Blank if not found |
-| email_status | String | The provider's status as returned, lowercased (Prospeo `person.email.status`, Apollo `email_status`); `unverified` for Apify rows; `not found` when no provider matched; legacy rows: legacy `email_status`, else `email_confidence` |
+| email_status | String | The provider's status as returned, lowercased (Prospeo `person.email.status`, Apollo `email_status`); `unverified` for Apify rows; `not found` when no provider matched; legacy rows: legacy `email_confidence` (`high` / `low` / blank) |
 | email_source | String | Provider name: `prospeo` / `apify` / `apollo`; `apollo-legacy` for rows imported in Task 9b; blank when no provider found an email |
-| linkedin_url | String | Normalized input URL, used as dedup key (legacy rows may be blank; they dedup by lowercase email) |
-| notes | String | Optional trailing `# note` from the input file; for imported rows the legacy kind and `contacted YYYY-MM-DD`, joined with `"; "` |
+| linkedin_url | String | Normalized input URL, used as dedup key (legacy rows may be blank; the import also dedups them by lowercase email) |
+| notes | String | Optional trailing `# note` from the input file; for imported rows the kind (`recruiter` / `hiring manager`) and `emailed YYYY-MM-DD`, joined with `"; "` |
 | outreach_line | String | Claude-drafted LinkedIn connection note (≤ `outreach.max_chars`), blank if --draft not used or the draft failed |
 | date_found | String | `YYYY-MM-DD HH:MM` (local time per `timezone` in `email_finder/settings.yaml`). |
 
