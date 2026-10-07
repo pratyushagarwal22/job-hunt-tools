@@ -59,6 +59,7 @@ SERPER_API_KEY=
 ANTHROPIC_API_KEY=
 APOLLO_API_KEY=
 ```
+(As of Task 9, `.env.example` also has `PROSPEO_API_KEY` and `APIFY_TOKEN`; `APOLLO_API_KEY` is optional, paid plan only.)
 `GOOGLE_APPLICATION_CREDENTIALS` is the same env var name used in Task 8 (GitHub Actions) — no separate path variable.
 
 **Dependencies in requirements.txt** (pin majors, not patches):
@@ -254,6 +255,7 @@ pytest tests/test_ats_client.py -v
 
 `url_utils.py`:
 - `normalize_url(url: str) -> str` — strip `utm_*`, `ref`, `source`, `gh_src`, `team`, `page`, `location`, `action`, fragments, trailing slashes, and a trailing `/apply` path segment. Lowercase scheme + domain. Keep path case. Do NOT strip `gh_jid` or `id` — they are job IDs on some career sites (e.g. company-hosted Greenhouse pages); stripping them would collapse different jobs into one URL and break dedup.
+- `platform_for_url(url: str) -> str` — the job platform by host, case-insensitive (added after Task 8): `ashby`, `greenhouse` (`*.greenhouse.io` or any URL with a `gh_jid` param), `lever`, `workable`, `wellfound`, `workatastartup`, `welcometothejungle`, `smartrecruiters`, `jobvite`, `breezy`, `a16z`, `workday`, `company_site` (big-company career hosts), else `other`. One dict holds the host mapping.
 
 `title_filter.py`:
 - `title_drop_reason(title: str, include: list[str], exclude: list[str], always_allow: list[str] = ()) -> str | None` — case-insensitive, whole-word matching. Must match at least one include keyword and zero exclude keywords. Returns `None` (passes), the matched exclude keyword, or `"no include match"` (signature as of Task 8 + filter tuning). `always_allow` phrases (`title_filter.always_allow`, e.g. "Member of Technical Staff") count as an include match and are removed from the title before the exclude check ("Senior Member of Technical Staff" still drops on "Senior").
@@ -322,9 +324,9 @@ pytest tests/test_jd_client.py -v
 
 ---
 
-## Task 6: scoring_client.py (Anthropic Haiku)
+## Task 6: scoring_client.py (Anthropic scoring model)
 
-**Goal**: Build the Haiku scoring client with pydantic validation. Support both full-JD and snippet modes. Save a scrubbed fixture.
+**Goal**: Build the scoring client (model from `scoring.model`) with pydantic validation. Support both full-JD and snippet modes. Save a scrubbed fixture.
 
 **Files touched**:
 - `job_scanner/scoring_client.py` (new)
@@ -338,8 +340,8 @@ pytest tests/test_jd_client.py -v
 ```
 ScoreResult:
   match_score: float        # 1.0–10.0, validated by pydantic (ge=1.0, le=10.0)
-  title: str                # Haiku-extracted (used for search results)
-  company: str              # Haiku-extracted (used for search results)
+  title: str                # extracted by the scoring model (used for search results)
+  company: str              # extracted by the scoring model (used for search results)
   location: str
   visa_mention: str
   core_requirements: str
@@ -347,14 +349,14 @@ ScoreResult:
 ```
 
 **What scoring_client.py exposes**:
-- `score_job(jd_text: str, jd_source: str, candidate_md: str, profile_yaml: str, model: str, max_tokens: int, max_jd_chars: int, force_tool_choice: bool, title_hint: str = "", company_hint: str = "") -> ScoreResult` — one Claude call to the scoring tool, validated with pydantic. `force_tool_choice=True`: forced tool call (Haiku). `False`: `tool_choice: auto`, `strict: true` on the tool, and "Always respond by calling the scoring tool." appended to the user message (Sonnet/Opus 5.5 reject forced tool_choice); no tool call → failed job. One tool schema for all models: `additionalProperties: false`, no `minimum`/`maximum` (pydantic still enforces 1.0–10.0). Scoring model for October: `claude-opus-5-5`. JD truncated to `max_jd_chars`. `title_hint` / `company_hint` passed for ATS jobs so Haiku doesn't need to extract them. Snippet inputs get an extra note in the user message.
+- `score_job(jd_text: str, jd_source: str, candidate_md: str, profile_yaml: str, model: str, max_tokens: int, max_jd_chars: int, force_tool_choice: bool, title_hint: str = "", company_hint: str = "") -> ScoreResult` — one Claude call to the scoring tool, validated with pydantic. `force_tool_choice=True`: forced tool call (Haiku). `False`: `tool_choice: auto`, `strict: true` on the tool, and "Always respond by calling the scoring tool." appended to the user message (Sonnet/Opus 5.5 reject forced tool_choice); no tool call → failed job. One tool schema for all models: `additionalProperties: false`, no `minimum`/`maximum` (pydantic still enforces 1.0–10.0). Scoring model for October: `claude-opus-5-5`. JD truncated to `max_jd_chars`. `title_hint` / `company_hint` passed for ATS jobs so the scoring model doesn't need to extract them. Snippet inputs get an extra note in the user message.
 - `model`, `force_tool_choice`, `max_tokens`, `max_jd_chars` come from `settings.yaml` `scoring` block, passed in by service.py (the client never reads settings.yaml). Add these keys in this task.
-- **Prompt caching**: the system block (generic rules + calibration + `candidate.md` + `profile.yaml`, ~4,600 tokens) has `cache_control: ephemeral`. Haiku 4.5's cache minimum is 4,096 tokens. Each call logs input / output / cache-creation / cache-read tokens; a warning is logged when both cache counters are 0.
+- **Prompt caching**: the system block (generic rules + calibration + `candidate.md` + `profile.yaml`, ~6,900 tokens on Opus 5.5 (measured; varies by model tokenizer)) has `cache_control: ephemeral`. Haiku 4.5's cache minimum is 4,096 tokens. Each call logs input / output / cache-creation / cache-read tokens; a warning is logged when both cache counters are 0.
 - **Calibration section** in the prompt: bands (9–10, 7–8, 6, 3–5, 1–2), how to apply them, one example per band, snippet-only rules. Generic only — personal rules (F-1 OPT, Seattle bonus) live in `profile.yaml`; profile wins on conflict.
 
 **Verification**:
 ```bash
-# 1. Real Haiku call — full JD mode (use a JD fetched in Task 5 verification)
+# 1. Real scoring-model call — full JD mode (use a JD fetched in Task 5 verification)
 python -c "
 from job_scanner.scoring_client import score_job
 import os, dotenv
@@ -406,7 +408,7 @@ pytest tests/test_scoring_client.py -v
   5. Title filter, location filter (location filter gets the raw URL)
   6. Convert all dates using `date_utils`: Serper relative dates → `YYYY-MM-DD`, ATS dates → `YYYY-MM-DD`. Sort by full datetime (newest first); jobs without a posted_date go after all dated jobs, in their original order. Apply cap (`max_jobs` or `max_jobs_per_run`).
   7. For each job: ATS jobs already have JD text; search-sourced jobs with a `jobs.ashbyhq.com/<slug>/<job id>` URL → JD from the Ashby public posting API (`ats_client.get_ashby_board`, board cached per slug for the run, job matched by id; counted as "full fetched"); any Ashby failure (AtsError, job not on board, empty text) and all other search-sourced jobs → fetch JD via jd_client (with snippet fallback). Score via scoring_client.
-  8. Use ATS title/company/location for ATS jobs (Haiku location if the ATS one is blank), Haiku title/company/location for search jobs. `source_query` = the query string, or `<ats>:<company>` for ATS jobs.
+  8. Use ATS title/company/location for ATS jobs (the scoring model's location if the ATS one is blank), the scoring model's title/company/location for search jobs. `source_query` = the query string, or `<ats>:<company>` for ATS jobs.
   9. Format `date_found` as `YYYY-MM-DD HH:MM` (local time per `timezone` setting). **One append at the end** with all scored rows.
   10. Return summary dict: `{found, new, filtered, scored, failed, skipped_cap}`
 - Per-job: every exception is caught and logged; the job is skipped. Anthropic `AuthenticationError` / `PermissionDeniedError` are re-raised.
@@ -432,7 +434,7 @@ found 42, new 12, filtered 2, scored 2, failed 0, skipped (cap): 8
 - Each row has all 14 columns in place (applied is blank, match_score is a number, url is normalized, etc.).
 - New rows land directly after the last data row, not after row 1000.
 - No crashes. Failed jobs (if any) are logged but don't stop the run.
-- Run completes in under 5 minutes (2 jobs = 2 Haiku calls + JD fetches).
+- Run completes in under 5 minutes (2 jobs = 2 scoring-model calls + JD fetches).
 
 **Additional check**:
 ```bash
@@ -461,7 +463,7 @@ python -m job_scanner.main --max-jobs 2
 **Out of scope**: No email_finder in CI. No README yet. No Runs/Errors tab, no log files, no artifacts. No change to the final summary line.
 
 **Logging build details** (spec in docs/DESIGN.md "Logging"):
-- **Prefixes**: each key line's message starts with `RUN`, `ATS`, `QUERY`, `FUNNEL`, `DROP`, `JD`, `FAIL`, `SCORES` or `COST`. The existing `Writing to sheet: <title>` line and the final summary line stay as they are.
+- **Prefixes**: each key line's message starts with `RUN`, `ATS`, `QUERY`, `FUNNEL`, `DROP`, `JD`, `FAIL`, `SCORES`, `COST` or `ASHBY` (added after Task 8: a search-found Ashby job whose board was unavailable or whose job id was not on the board; it falls back to a plain page fetch). The existing `Writing to sheet: <title>` line and the final summary line stay as they are.
 - **Header (`RUN`)**: run start (configured tz), effective cap (after `--max-jobs`), `ats_lookback_days`, `scoring.model`, existing URL count from the sheet.
 - **ATS**: totals (companies polled, jobs within lookback); list of companies with 0 jobs; list of companies with errors (slug + HTTP status, or error type for request/JSON failures). Today `ats_client` logs the warning and returns `[]` for both "no jobs" and "error", so service can't tell them apart: change ats_client to report the error to the caller, keeping "one company never crashes the run".
 - **QUERY**: per query: pages fetched, results, new (after dedup), passed filters, new+passed from page 2+ (tag each search job with its page number). Search errors as `FAIL search` lines (query name + HTTP status). One closing line with total Serper calls this run (every request sent).
@@ -523,71 +525,191 @@ pytest -v
 
 **Cron times note**: The crons are plain UTC, so the local run time shifts by one hour with DST (5:07 AM / 3:07 PM CDT in summer, 4:07 AM / 2:07 PM CST in winter).
 
+### Post-Task-8 changes
+
+Built after Task 8; DESIGN.md has the details.
+- `job_scanner/experience_filter.py` (+ `tests/test_experience_filter.py`): drops jobs whose JD requires more than `experience_filter.max_years_required` years; adds `DROP experience` lines and the `experience dropped` funnel stage.
+- `url_utils.platform_for_url`: fills the new `platform` column (ATS jobs use the ATS name).
+- Header-driven Jobs columns: `sheets_repo.get_columns` reads the header row once per run and maps the 14 headers by name; a missing header is fatal before anything is written. `get_existing_urls` reads the `url` column; `append_jobs` takes rows as dicts keyed by header name.
+- Ashby API JD for search jobs: `jobs.ashbyhq.com/<slug>/<job id>` search results get their JD from `ats_client.get_ashby_board` (board cached per slug per run), falling back to a plain fetch with an `ASHBY` log line.
+
 ---
 
-## Task 9: email_finder (Apollo + Outreach + CLI)
+## Task 9: email_finder (Prospeo → Apify chain + Outreach + CLI)
 
-**Goal**: Build the full email_finder module: Apollo client, Claude outreach line drafter, sheets_repo for Contacts tab, service, and CLI.
+**Goal**: Build the email_finder module: a batch CLI that takes LinkedIn profile URLs, looks each one up through an ordered chain of email providers (Prospeo, then Apify; Apollo available but disabled), optionally drafts an outreach line with Claude, and appends one row per URL to the Contacts tab.
+
+**Provider facts** (from real tests, Oct 5 2026; details in docs/DESIGN.md "Data Flow — email_finder"):
+- **Prospeo** (free, 100 credits/month; enrich limits 1/s, 20/min, 50/day): `POST https://api.prospeo.io/enrich-person`, header `X-KEY`, body `{"data": {"linkedin_url": ...}}`. Match (`error: false`): email at `person.email.email`, status at `person.email.status`, name at `person.full_name`, title at `person.current_job_title`, company at `company.name`. No match: `{"error": true, "error_code": "NO_MATCH"}`, or a match whose email is not revealed (`person.email.revealed` false, or an email containing `*`, i.e. masked). The match response also carries a `person.mobile` object; it is never read or stored (and is scrubbed in fixtures).
+- **Apify** actor `vulnv/linkedin-email-finder` (pay per email found, ~$0.026, from the $5/month free credit): `POST https://api.apify.com/v2/acts/vulnv~linkedin-email-finder/run-sync-get-dataset-items`, header `Authorization: Bearer <APIFY_TOKEN>`, body `{"urls": [...]}`, HTTP 201. One item per URL with `name`, `company`, `domain`, `email`, `found`, `linkedin_url` (no status, no title). No match = `found: false` with `error` exactly `"No email found in response"`.
+- **Apollo**: `people/match` and `people/bulk_match` return 403 `API_INACCESSIBLE` on the free plan. Kept as a disabled provider for when a paid plan exists.
 
 **Files touched**:
+- `shared/sheets.py` (edit — move in `header_positions` and `column_letter` from `job_scanner/sheets_repo.py`)
+- `job_scanner/sheets_repo.py` (edit — import `header_positions` / `column_letter` from `shared/sheets.py`; allowed exception to "no job_scanner changes", behavior unchanged)
+- `shared/linkedin_url.py` (new)
 - `email_finder/__init__.py` (new, empty)
+- `email_finder/settings.yaml` (new)
+- `email_finder/linkedin-profiles.example.txt` (new, committed; the real `email_finder/linkedin-profiles.txt` is gitignored)
+- `email_finder/prospeo_client.py` (new)
+- `email_finder/apify_client.py` (new)
 - `email_finder/apollo_client.py` (new)
 - `email_finder/outreach_client.py` (new)
 - `email_finder/sheets_repo.py` (new)
 - `email_finder/service.py` (new)
 - `email_finder/main.py` (new)
-- `tests/test_apollo_client.py` (new)
-- `tests/test_outreach_client.py` (new)
-- `shared/linkedin_url.py` (new)
-- `tests/test_linkedin_url.py` (new)
-- `tests/fixtures/apollo_match_response.json` (new, scrubbed)
-- `tests/fixtures/outreach_response.json` (new, scrubbed)
+- `tests/test_linkedin_url.py`, `tests/test_prospeo_client.py`, `tests/test_apify_client.py`, `tests/test_apollo_client.py`, `tests/test_outreach_client.py`, `tests/test_email_finder_sheets_repo.py`, `tests/test_email_finder_service.py` (new)
+- `tests/fixtures/prospeo_enrich_match.json`, `prospeo_enrich_nomatch.json`, `apify_match.json`, `apify_nomatch.json`, `apollo_403.json`, `apollo_bulk_match.json`, `outreach_response.json` (new, scrubbed — see Fixtures)
 
-**Out of scope**: No changes to job_scanner. No phone numbers from Apollo.
+**Out of scope**: No other job_scanner changes. No phone numbers from any provider. No LinkedIn scraping: our code never fetches LinkedIn pages; email providers receive the URL. No retry logic. No CI workflow for email_finder (manual CLI only). `email_finder` never imports from `job_scanner`.
+
+**Input**:
+- CLI: `python -m email_finder.main [urls ...] [--file PATH] [--draft]`.
+- No URLs and no `--file` → read `email_finder/linkedin-profiles.txt` (gitignored; copy from `linkedin-profiles.example.txt`).
+- File format: one URL per line; blank lines and lines starting with `#` are ignored; an optional trailing `# note` on a URL line goes into the `notes` column.
+- Every URL is normalized with `shared/linkedin_url.normalize_linkedin_url`; only `/in/` profile URLs are kept (anything else prints `ignored <line> (not a profile URL)`). Dedup within the input (later copies print `duplicate <url>`) and against the Contacts tab's `linkedin_url` column (prints `<url> exists`).
+- `max_urls_per_run` (20) counts the URLs left **after** removing existing and in-input duplicates. More than that → exit 1 before any provider call.
+
+**Sheet target**: email_finder runs only locally, so it writes to the TEST sheet from `.env` by default. Real use: `SHEET_ID=<prod id> python -m email_finder.main ...`. The `Writing to sheet: <title>` line shows which sheet was hit.
+
+**Provider chain** (`service.py`):
+- Providers run in the order of the `providers` list in `email_finder/settings.yaml` (default `[prospeo, apify]`; `apollo` available).
+- Each provider runs **once over all URLs still unmatched**, then passes its no-matches to the next provider.
+- **Prospeo**: one call per URL, `prospeo.timeout_seconds` (15), `prospeo.min_interval_seconds` (3.1) sleep between calls — keeps under 20/min for any cap. The 50/day limit is covered by the stop rule (429 → stop, rest pending).
+- **Apify**: one actor run for all its URLs with its own `apify.timeout_seconds` (300). Results are mapped back by normalized `linkedin_url`.
+- **Apollo**: `people/bulk_match` in batches of `apollo.batch_size` (10), `apollo.timeout_seconds` (15), `apollo.min_interval_seconds` (1.2) between batches, `reveal_personal_emails: false`, never phone. Results are mapped back by the returned record's normalized `linkedin_url`; a submitted URL with no returned record is a no-match. Verify this against a real response before enabling Apollo.
+- `email_status` is stored as the provider returns it, lowercased; Apify rows get `"unverified"`.
+- A URL matched by no provider → row with blank `email` and `email_status` `"not found"` (so the same person is never looked up twice).
+
+**Errors**:
+- **No-match** is only: Prospeo `error_code: NO_MATCH`, or a Prospeo match whose `person.email.email` is empty/null, whose `person.email.revealed` is false, or whose email contains `*` (masked); Apify `found: false` with `error` exactly `"No email found in response"`; Apollo no record returned for that URL. A no-match falls through to the next provider.
+- **Anything else** (non-2xx, other error codes, 401/403/429, timeout, malformed body, an Apify item missing for a submitted URL) → stop the whole run: append the rows already resolved (found + not found), do **not** write the unresolved URLs (they are retried next run), print which URLs are pending, exit 1.
+- **`--draft` failures**: a failed Claude call → that row is written with a blank `outreach_line` and a warning (no name or email in it); the run continues. An Anthropic authentication / permission error → stop drafting, still append all rows (remaining `outreach_line`s blank), exit 1.
 
 **What each module exposes**:
 
-`apollo_client.py`:
-- `find_email(linkedin_url: str) -> dict` — calls Apollo people/match API. Returns `{name, company, title, email, email_status}`. `email` is blank and `email_status` is "not found" if no match.
+`shared/linkedin_url.py`:
+- `normalize_linkedin_url(url: str) -> str` — lowercase, strip `www.`, trailing slash, all query params and fragments. E.g. `https://www.LinkedIn.com/in/Jane-Doe/?utm_source=foo` → `https://linkedin.com/in/jane-doe`. Lives in `shared/` because email_finder must not import from job_scanner. Both input URLs and existing sheet URLs are normalized before comparison.
+
+`shared/sheets.py` (moved in):
+- `header_positions(header_row: list) -> dict[str, int]` and `column_letter(index: int) -> str`, unchanged. `job_scanner/sheets_repo.py` imports them from here; its tests keep passing unchanged.
+
+`prospeo_client.py`, `apify_client.py`, `apollo_client.py`:
+- One request per call, no retries, timeout passed in. Clients never read `settings.yaml` (values passed in by service). API keys are read from env and sent **only in headers** (`X-KEY`, `Authorization: Bearer`, `x-api-key`), never in URLs, exception messages or logs.
+- Each client returns a match as `{name, company, title, email, email_status}` (fields a provider doesn't return are blank), returns "no match" for exactly the no-match cases above, and raises `RuntimeError` (provider name + HTTP status or error code, never the key) for everything else.
+- Prospeo: `enrich_person(linkedin_url, timeout)` → match or `None` (`None` for `NO_MATCH`, an empty/null `person.email.email`, `person.email.revealed` false, or an email containing `*`). Fields: `person.full_name`, `company.name`, `person.current_job_title`, `person.email.email`, `person.email.status` (lowercased).
+- Apify: `find_emails(urls, actor_id, timeout)` → one entry per returned item, keyed by the item's `linkedin_url`; `email_status` is `"unverified"` (Apify returns no status). Service maps entries to submitted URLs by normalized URL; a submitted URL with no item is an error.
+- Apollo: `bulk_match(linkedin_urls, timeout)` → returned records keyed by normalized `linkedin_url` (a submitted URL with no record = no-match); `email_status` lowercased; body sets `reveal_personal_emails: false` and never requests phone numbers.
 
 `outreach_client.py`:
-- `draft_outreach(name: str, company: str, title: str, candidate_md: str) -> str` — one Claude call to draft a short outreach line.
+- `draft_outreach(name, company, title, candidate_md, model, max_tokens) -> str` — one Claude call per found row. `model` / `max_tokens` from `outreach` in settings, passed in by service. Uses `config/candidate.md`. The prompt and the drafted line are never logged. Errors propagate; service applies the `--draft` failure rules above.
 
-`sheets_repo.py` (email_finder's):
-- `get_existing_linkedin_urls(sheet_id: str) -> set[str]` — reads the `linkedin_url` column from the Contacts tab. URLs are normalized before being added to the set (see below).
-- `append_contact(sheet_id: str, row: list) -> None` — appends one row to the Contacts tab.
-
-`shared/linkedin_url.py`:
-- `normalize_linkedin_url(url: str) -> str` — lowercase, strip `www.`, trailing slash, all query params. E.g. `https://www.LinkedIn.com/in/Jane-Doe/?utm_source=foo` → `https://linkedin.com/in/jane-doe`. Lives in `shared/` because email_finder must not import from job_scanner. Used for dedup: both the input URL and existing sheet URLs are normalized before comparison.
+`sheets_repo.py` (email_finder's, header-driven like Jobs):
+- `CONTACTS_HEADERS = (contacted, name, company, title, email, email_status, email_source, linkedin_url, notes, outreach_line, date_found)`.
+- `get_columns(sheet_id) -> dict[str, int]` — reads the Contacts header row once, maps headers by name (trimmed, case-insensitive) via `shared/sheets.header_positions`; any missing header → fatal error naming them, nothing written.
+- `get_existing_keys(sheet_id, columns) -> tuple[set[str], set[str]]` — (the `linkedin_url` column, normalized; the `email` column, lowercased), blanks skipped. Task 9 dedups on the URL set only; Task 9b uses both.
+- `append_contacts(sheet_id, rows: list[dict], columns) -> None` — rows as dicts keyed by header name, one append call, `contacted` written as `""`.
+- `get_sheet_title(sheet_id) -> str` — passthrough to `shared/sheets.get_sheet_title`.
 
 `service.py`:
-- `find_and_save(linkedin_url: str, draft: bool) -> dict` — normalizes the URL, then dedup check → Apollo → optional outreach draft → append to sheet.
+- Reads input, normalizes, dedups, enforces the cap, runs the provider chain, drafts outreach (`--draft`), builds row dicts, and does **one append at the end** (or at the stop, per Errors). `email_source` = provider name (`prospeo` / `apify` / `apollo`), blank for not-found rows. `date_found` = `YYYY-MM-DD HH:MM` in `timezone`, formatted inline with `zoneinfo` (no `job_scanner.date_utils`).
+
+`email_finder/settings.yaml`:
+- `timezone`, `max_urls_per_run` (20), `providers` (`[prospeo, apify]`), `prospeo.timeout_seconds` (15), `prospeo.min_interval_seconds` (3.1), `apify.actor_id` (`vulnv/linkedin-email-finder`), `apify.timeout_seconds` (300), `apollo.batch_size` (10), `apollo.timeout_seconds` (15), `apollo.min_interval_seconds` (1.2), `outreach.model`, `outreach.max_tokens`.
 
 `main.py`:
-- CLI: `python -m email_finder.main <linkedin_url> [--draft]`
-- At the start of every run, print the target sheet's title (read from the sheet via `shared/sheets.get_sheet_title()`), e.g. `"Writing to sheet: Job Tracker TEST"`. Same pattern as job_scanner main.py (Task 7).
+- `load_dotenv()`, then check env before any work: `SHEET_ID`, `GOOGLE_APPLICATION_CREDENTIALS`, plus the key of each **enabled** provider only (`PROSPEO_API_KEY`, `APIFY_TOKEN`, `APOLLO_API_KEY`); `ANTHROPIC_API_KEY` only with `--draft`. One error naming every missing variable, exit 1.
+- Prints `Writing to sheet: <title>` first.
+- One line per input line: `ignored <line> (not a profile URL)`, `duplicate <url>`, or the URL + outcome (`exists` / `found via <provider> <status>` / `not found` / `pending`). Never prints emails, names or keys.
+- Ends with a summary line: input, ignored, duplicate, skipped existing, found per provider, not found, pending. Any exception → logged, exit 1.
+
+**Fixtures** (scrub every name, email, phone, URL, domain and company to fake values; keep structure):
+- `prospeo_enrich_match.json`, `prospeo_enrich_nomatch.json`, `apify_match.json`, `apify_nomatch.json` — from `_scratch/*`.
+- `apollo_403.json` — from `_scratch/apollo_test.json`.
+- `apollo_bulk_match.json` — **synthetic**, built from Apollo's documented `bulk_match` shape and labelled synthetic in the file.
+- `outreach_response.json` — scrubbed Claude response.
+
+**Tests** (fixtures only, no real API calls):
+- Each client: match, no-match, and error cases (non-2xx, other error codes, 401/403/429, timeout, malformed body); keys appear only in headers; `email_status` lowercased.
+- Prospeo: a match with empty/null `person.email.email`, `person.email.revealed` false, or an email containing `*` is a no-match; `person.mobile` is never read.
+- Apify: exact `"No email found in response"` string is no-match; any other `found: false` error is an error; a missing item for a submitted URL stops the run.
+- Apollo: records mapped by normalized `linkedin_url`; a submitted URL with no record is a no-match.
+- Service: chain order (Prospeo no-matches go to Apify; matched URLs never reach the next provider); partial failure appends resolved rows, writes no pending URLs, reports them, exits 1; rate-limit spacing (patched `sleep`, `min_interval_seconds` between Prospeo calls and Apollo batches); cap counted after existing + duplicate removal, exceeded → exit before any lookup; `--draft` failure → blank `outreach_line` + warning, run continues; Anthropic auth/permission error → drafting stops, all rows appended, exit 1.
+- Input file parsing: `#` lines and blanks ignored, trailing `# note` → `notes`, non-`/in/` lines reported as `ignored`, in-input dupes reported as `duplicate`, sheet dupes as `exists`; summary counts match.
+- Contacts repo: missing header is fatal and writes nothing; rows land in the right columns by header name; `get_existing_keys` returns normalized URLs and lowercase emails, blanks skipped.
+- `linkedin_url`: lowercase, `www.` stripping, trailing slash, query param removal; two variant URLs for the same profile normalize to the same string.
 
 **Verification**:
 ```bash
-# 1. Unit tests (fixtures only, no real Apollo call)
-pytest tests/test_apollo_client.py tests/test_outreach_client.py tests/test_linkedin_url.py -v
-# Expected: all pass.
-# LinkedIn URL normalization tests cover: lowercase, www stripping, trailing slash,
-# query param removal, and the critical case: two variant URLs for the same profile
-# normalize to the same string.
+# 0. Manual, before any verification: update row 1 of BOTH the TEST and prod Contacts tabs
+#    to the 11 headers in docs/DESIGN.md.
 
-# 2. ONE real Apollo lookup (burns 1 credit)
-python -m email_finder.main "https://www.linkedin.com/in/some-test-person/" --draft
-# Expected: prints "Writing to sheet: Job Tracker TEST" first,
-#           then result (name, email or "not found", outreach line if --draft).
-# TEST sheet Contacts tab has one new row, directly after the last data row, with `contacted` blank.
+# 1. Unit tests
+pytest -v
+# Expected: all pass, including the existing job_scanner tests (header helpers moved, behavior unchanged).
 
-# 3. Idempotency — run same URL again (with different casing/trailing slash)
-python -m email_finder.main "https://www.LinkedIn.com/in/Some-Test-Person"
-# Expected: "Already exists in sheet, skipping." (normalized URL matches)
+# 2. Dry check on the TEST sheet — a file with 2 URLs: one real profile, one fake
+python -m email_finder.main --file /tmp/two-profiles.txt
+# Expected: "Writing to sheet: Job Tracker TEST" first; one URL "found via <provider> <status>",
+# the fake one "not found"; summary line; 2 new Contacts rows directly after the last data row,
+# `contacted` blank. No emails or names in the output.
+
+# 3. Idempotency — rerun the same file
+python -m email_finder.main --file /tmp/two-profiles.txt
+# Expected: both URLs "exists"; nothing appended; no provider calls.
+
+# 4. One live --draft on a third real profile URL (not in /tmp/two-profiles.txt; no rows deleted)
+python -m email_finder.main "<a third real profile URL>" --draft
+# Expected: "found via <provider> <status>"; the new row has a non-blank outreach_line;
+# the drafted line is not printed.
 ```
 
-**Apollo API note**: `APOLLO_API_KEY` env var. Endpoint: `POST https://api.apollo.io/api/v1/people/match` with `linkedin_url` in body. Returns person object with `email` and `email_status`.
+Real use after verification: `SHEET_ID=<prod id> python -m email_finder.main ...` (local `.env` always points at TEST).
+
+---
+
+## Task 9b: Legacy contacts import (one-off)
+
+**Goal**: Import the old Apollo contacts from `_legacy/contacts-master-latest.json` into the Contacts tab, once, without duplicates.
+
+**Files touched**:
+- `_scratch/import_legacy_contacts.py` (new, local-only: `_scratch/` is gitignored, not in the repo)
+
+**Out of scope**: No changes to email_finder or shared code. No provider calls. No committed tests (one-off script).
+
+**Input**: `_legacy/contacts-master-latest.json` — `values[0]` is the header, `values[1:]` are rows. Rows may be shorter than the header (missing cells = empty). Map by header name, not position.
+
+**Mapping** (rows with an empty `email` are skipped):
+- `name`, `company`, `title`, `email` — copied.
+- `linkedin_url` — normalized with `shared/linkedin_url.normalize_linkedin_url`.
+- `email_source` — `"apollo-legacy"`.
+- `email_status` — legacy `email_status` if present, else `email_confidence`, lowercased (same rule as the providers).
+- `notes` — the kind from legacy `notes` (`kind=RECRUITER|HIRING_MANAGER`) and `contacted YYYY-MM-DD` when `last_contacted_at` is set, joined with `"; "`.
+- `contacted` — blank.
+- `date_found` — the date in `contact_id` (`CT-YYYYMMDD-…`) as `YYYY-MM-DD 00:00`; blank if `contact_id` doesn't parse.
+- `outreach_line` — blank.
+
+**Behavior**:
+- Uses email_finder's Contacts repo (`get_columns`, `get_existing_keys`, `append_contacts`) and the shared normalizer.
+- Dedup key = normalized LinkedIn URL, else lowercase email (rows with an empty URL are imported). Keys are compared against the Contacts tab and within the legacy file; for duplicate keys the first row is kept and the rest count as duplicates. Safe to rerun.
+- Dry run by default: prints counts only (rows, skipped no-email, skipped duplicate, to write). `--apply` appends all rows in one call.
+- Never prints names or emails.
+
+**Verification**:
+```bash
+# 1. Dry run on the TEST sheet
+python _scratch/import_legacy_contacts.py
+# Expected: rows / skipped no-email / skipped duplicate / to write counts; nothing written.
+
+# 2. Apply on the TEST sheet, then rerun
+python _scratch/import_legacy_contacts.py --apply
+python _scratch/import_legacy_contacts.py
+# Expected: rows appended once; the rerun reports every row as a duplicate, "to write 0".
+
+# 3. Production (only after the TEST sheet looks right)
+SHEET_ID=<prod id> python _scratch/import_legacy_contacts.py
+SHEET_ID=<prod id> python _scratch/import_legacy_contacts.py --apply
+```
 
 ---
 
@@ -604,13 +726,13 @@ python -m email_finder.main "https://www.LinkedIn.com/in/Some-Test-Person"
 1. **What this does** — one paragraph
 2. **Setup** — clone, venv, pip install, .env from .env.example
 3. **Secrets list** — table of every env var / file with description and where to get it
-4. **Local run** — `python -m job_scanner.main --max-jobs 2` and `python -m email_finder.main <url> --draft`
+4. **Local run** — `python -m job_scanner.main --max-jobs 2` and `python -m email_finder.main [urls ...] [--file PATH] [--draft]` (TEST by default; prod via a `SHEET_ID=<prod id>` prefix)
 5. **GitHub Actions** — how to set secrets, how to trigger manually, cron schedule
 6. **Testing** — `pytest` command, what the test sheet is for
 7. **Config files** — what profile.yaml, candidate.md, settings.yaml, queries.yaml, companies.yaml do
 8. **Logs** — where to find run logs (Actions tab → run → job log, plus the run's step summary), retention (90 days by default), the fixed prefixes (`QUERY`, `DROP`, `FUNNEL`, `SCORES`, `COST`, …) and what each means, and this export command for a multi-run review:
    ```bash
-   gh run list --workflow scan.yaml --limit 30 --json databaseId -q '.[].databaseId' | xargs -I{} gh run view {} --log | grep -E "DROP|QUERY|FUNNEL|SCORES|COST" > review.txt
+   gh run list --workflow scan.yaml --limit 60 --json databaseId -q '.[].databaseId' | xargs -I{} gh run view {} --log | grep -E "RUN|ATS|QUERY|FUNNEL|DROP|JD|FAIL|SCORES|COST|ASHBY" > review.txt
    ```
 9. **Architecture** — brief pointer to docs/DESIGN.md
 
@@ -642,8 +764,9 @@ Task 1 (setup)
 │                            │      │      │             │
 Task 9 (email_finder) ◄─────┘      │      │             │
    depends on: Task 1 (shared/sheets.py)                 │
+   └── Task 9b (legacy contacts import, one-off)         │
                                                          │
 Task 10 (README) ◄── all above ──────────────────────────┘
 ```
 
-Tasks 2 and 3 are independent of each other but both depend on Task 1. Task 9 depends on Task 1 (shared/sheets.py) and is sequenced after Task 7 per preference, not strict dependency. Task 4 has no external dependencies but is sequenced after 2+3 because the tests benefit from understanding the real data shapes from those fixtures.
+Tasks 2 and 3 are independent of each other but both depend on Task 1. Task 9 depends on Task 1 (shared/sheets.py) and is sequenced after Task 7 per preference, not strict dependency. Task 9b depends on Task 9 (Contacts repo + LinkedIn normalizer). Task 4 has no external dependencies but is sequenced after 2+3 because the tests benefit from understanding the real data shapes from those fixtures.

@@ -5,6 +5,7 @@ Columns are located by header name (row 1), so the sheet's column order is free 
 
 from job_scanner.url_utils import normalize_url
 from shared import sheets
+from shared.sheets import column_letter, header_positions
 
 _TAB = "Jobs"
 _HEADER_RANGE = "1:1"
@@ -22,25 +23,6 @@ class MissingHeadersError(RuntimeError):
         super().__init__(
             f"Jobs tab header row is missing column(s): {', '.join(missing)}; nothing written"
         )
-
-
-def header_positions(header_row: list) -> dict[str, int]:
-    """Trimmed, lowercased header name -> 0-based column index (first occurrence wins)."""
-    positions = {}
-    for index, cell in enumerate(header_row):
-        name = str(cell).strip().lower()
-        if name and name not in positions:
-            positions[name] = index
-    return positions
-
-
-def column_letter(index: int) -> str:
-    letters = ""
-    index += 1
-    while index:
-        index, remainder = divmod(index - 1, 26)
-        letters = chr(ord("A") + remainder) + letters
-    return letters
 
 
 def get_columns(sheet_id: str) -> dict[str, int]:

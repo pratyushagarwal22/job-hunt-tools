@@ -1,0 +1,6 @@
+# Copy to email_finder/linkedin-profiles.txt (gitignored) and add real profile URLs.
+# One LinkedIn profile URL per line. Blank lines and lines starting with # are ignored.
+# An optional trailing "# note" goes into the notes column.
+
+https://www.linkedin.com/in/jane-doe-example/
+https://www.linkedin.com/in/john-roe-example  # recruiter at Example Corp

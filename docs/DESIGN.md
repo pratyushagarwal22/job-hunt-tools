@@ -14,10 +14,10 @@ Find fresh US-based software engineering jobs, score them against my profile, an
 ## Out of Scope
 
 - No UI, no server, no database
-- No LinkedIn scraping
+- No LinkedIn scraping: our code never fetches LinkedIn pages; email providers receive the URL.
 - No LangChain / agent framework
 - No Google Custom Search API
-- No phone numbers from Apollo (email only)
+- No phone numbers from any email provider (email only)
 - No non-US jobs (F-1 OPT; US-only search)
 
 ## Architecture
@@ -39,39 +39,47 @@ job-hunt-tools/
 │   ├── ats_client.py            # Greenhouse/Lever/Ashby public APIs (list call returns jobs with JD text, one call per company)
 │   ├── date_utils.py            # parsers → tz-aware datetimes; formatters → YYYY-MM-DD / YYYY-MM-DD HH:MM strings
 │   ├── jd_client.py             # plain HTTP fetch for non-ATS job pages
-│   ├── scoring_client.py        # Anthropic Haiku structured JSON call
-│   ├── sheets_repo.py           # read/append Google Sheet (Jobs tab only)
-│   ├── url_utils.py             # normalize URLs (strip tracking params)
+│   ├── scoring_client.py        # Anthropic structured JSON call with the scoring model
+│   ├── sheets_repo.py           # read/append Google Sheet (Jobs tab only; header-driven columns)
+│   ├── url_utils.py             # normalize URLs (strip tracking params); platform_for_url
 │   ├── title_filter.py          # cheap keyword include/exclude
 │   ├── location_filter.py       # drop clearly non-US jobs before scoring
+│   ├── experience_filter.py     # smallest required years of experience in a JD
 │   ├── queries.yaml             # search queries (one per job board site + company_sites)
 │   ├── companies.yaml           # tracked companies on Greenhouse/Lever/Ashby
 │   └── settings.yaml            # committed config (caps, search params, filters, scoring model)
 ├── email_finder/
-│   ├── main.py                  # CLI entry point
-│   ├── service.py               # orchestration
-│   ├── apollo_client.py         # Apollo people/match (email only)
+│   ├── main.py                  # CLI entry point (URLs, --file, --draft)
+│   ├── service.py               # input parsing, provider chain, row building
+│   ├── prospeo_client.py        # Prospeo enrich-person (provider 1)
+│   ├── apify_client.py          # Apify actor vulnv/linkedin-email-finder (provider 2)
+│   ├── apollo_client.py         # Apollo people/bulk_match (disabled; paid plan only)
 │   ├── outreach_client.py       # Claude outreach line drafting
-│   └── sheets_repo.py           # read/append Google Sheet (Contacts tab only)
+│   ├── sheets_repo.py           # read/append Google Sheet (Contacts tab only; header-driven columns)
+│   ├── settings.yaml            # committed config (cap, provider order, rate limits, outreach model)
+│   ├── linkedin-profiles.txt    # input URLs, one per line (gitignored)
+│   └── linkedin-profiles.example.txt  # committed — shows format
 ├── shared/
-│   ├── sheets.py                # Google Sheets auth + low-level read/append
+│   ├── sheets.py                # Google Sheets auth + low-level read/append + header_positions / column_letter
 │   └── linkedin_url.py          # normalize LinkedIn URLs for dedup
 ├── tests/
+│   ├── test_experience_filter.py  # experience filter unit tests (one test_*.py per module)
 │   └── fixtures/                # scrubbed real API responses (JSON)
 ├── docs/
 │   ├── DESIGN.md                # this file
 │   ├── PLAN.md                  # build plan, one task per session
 │   └── PROJECT_CONTEXT.md       # summary + "why" (gitignored)
 ├── _legacy/                     # old broader-search files (gitignored, not used by code)
+├── _scratch/                    # local-only one-off scripts, e.g. backfill_platform.py (gitignored, not in the repo)
 ├── .env.example
 ├── .gitignore
 ├── requirements.txt
 └── README.md
 ```
 
-**Layering rule**: `main.py` is thin (parse args, call service). `service.py` holds all logic. `*_client.py` files only call external APIs — one client per external system. `sheets_repo.py` is the only file that touches the sheet. Both `sheets_repo.py` files use `shared/sheets.py` for auth and raw sheet operations. Settings are passed into clients as arguments; clients never read `settings.yaml`.
+**Layering rule**: `main.py` is thin (parse args, call service). `service.py` holds all logic. `*_client.py` files only call external APIs — one client per external system. `sheets_repo.py` is the only file that touches the sheet. Both `sheets_repo.py` files use `shared/sheets.py` for auth and raw sheet operations. Settings are passed into clients as arguments; clients never read `settings.yaml`. `email_finder` never imports from `job_scanner`; code both need lives in `shared/`.
 
-**Run command**: `python -m job_scanner.main` from the repo root.
+**Run commands** (from the repo root): `python -m job_scanner.main`, `python -m email_finder.main [urls ...] [--file PATH] [--draft]`.
 
 ## Data Flow — job_scanner
 
@@ -84,7 +92,7 @@ job-hunt-tools/
 7. Title keyword filter (`title_filter` in `settings.yaml`, case-insensitive, whole-word): at least one `include` keyword and no `exclude` keyword. `always_allow` phrases (currently "Member of Technical Staff") count as an include match and are removed from the title before the exclude check, so "Member of Technical Staff" passes but "Senior Member of Technical Staff" drops on "Senior". Include covers SWE / SDE / Developer / Frontend / Front End / UI / Mobile / iOS / Android / Backend / Full Stack and early-career titles; exclude covers seniority (Senior, Sr, Staff, Principal, Lead, …), interns, embedded/firmware, nursing, and non-engineering "Developer" roles (Developer Advocate, Developer Relations, Business Developer).
 8. Location filter: drop jobs whose location is clearly outside the US (`location_filter.exclude` in `settings.yaml`), unless a US signal (`location_filter.us_signals`) appears in any checked field — so "New York or Zurich" or "San Francisco; London" is kept. US signals: "United States", "USA", "U.S.", "Remote - US", "Remote (US)", "US Remote", full state names (except Georgia) and major US tech cities. Never bare "US" or two-letter state codes ("us" matches "join us"). For ATS jobs, check the location field. For search results (no structured location field), check the title and the **raw** (pre-normalization, URL-decoded) URL — not the snippet, which often mentions other offices or teams (scorer's non-US hard blocker catches the rest) — normalization strips params like `?location=` that the filter needs (catches locations in URLs, e.g. NVIDIA's `Taiwan-Taipei` or Google's `?location=India`). Keep US locations, "Remote", "Remote - US", and blank/unknown.
 9. Apply score cap (`max_jobs_per_run`, default 150, overridable via `--max-jobs`). Newest jobs first — sort on the full datetime (not just date); jobs without a posted_date go after all dated jobs, in their original order. Over-cap jobs are not written to the sheet.
-10. For each surviving job → ATS jobs already have full JD text from the list call in step 2 (if an ATS job has no JD text, it is scored from title + location as `snippet`). Search-sourced jobs whose URL is `jobs.ashbyhq.com/<slug>/<job id>` → JD from the Ashby public posting API (`ats_client.get_ashby_board`, no lookback filter; board fetched once per slug per run, job matched by id; `descriptionPlain`, else `descriptionHtml` as text), counted as "full fetched" — Ashby pages are JavaScript-rendered, so a plain fetch gets no JD. If the board errors, the job id is not on it, or its text is empty, fall through to the normal path. Other search-sourced jobs → fetch full JD via `jd_client.py` (plain HTTP fetch, browser User-Agent, strips script/style/noscript/svg/template). If the fetch fails, returns non-2xx, is not HTML, or has fewer than `jd_min_chars` (500) characters of visible text (common on JavaScript-heavy career sites), fall back to scoring from the search result's title + snippet instead.
+10. For each surviving job → ATS jobs already have full JD text from the list call in step 2 (if an ATS job has no JD text, it is scored from title + location as `snippet`). Search-sourced jobs whose URL is `jobs.ashbyhq.com/<slug>/<job id>` → JD from the Ashby public posting API (`ats_client.get_ashby_board`, no lookback filter; board fetched once per slug per run, job matched by id; `descriptionPlain`, else `descriptionHtml` as text), counted as "full fetched" — Ashby pages are JavaScript-rendered, so a plain fetch gets no JD. If the board errors, the job id is not on it, or its text is empty, fall through to the normal path (board unavailable or job id not on the board → an `ASHBY` log line). Other search-sourced jobs → fetch full JD via `jd_client.py` (plain HTTP fetch, browser User-Agent, strips script/style/noscript/svg/template). If the fetch fails, returns non-2xx, is not HTML, or has fewer than `jd_min_chars` (500) characters of visible text (common on JavaScript-heavy career sites), fall back to scoring from the search result's title + snippet instead.
 11. **Experience filter** (`experience_filter.py`, after JD fetch, before scoring): find the smallest required years of experience in the JD (or the title + snippet fallback). Text is cleaned first (HTML entities unescaped, tags stripped, whitespace collapsed). Counts only experience requirements: digits or one–ten, `N+`, `N-M` / `N to M` (→ N), "at least N", "minimum (of) N", tied to experience ("years of experience", "years' experience", "years in/with/of <skill>", degree + N years, or "experience" later in the same sentence; `N+` and ranges count on their own). Ignores unrelated years ("founded 10 years ago", "10 years in business", "5 year old"). Drop when required years > `experience_filter.max_years_required` (2). No requirement found → keep. Dropped jobs are not scored or written and count in `filtered`. The filter gets text only; service compares against the setting.
 12. For each remaining JD (or snippet fallback) → one Claude call (`scoring.model`, `scoring.max_tokens`; JD truncated to `scoring.max_jd_chars`) with `config/candidate.md` + `config/profile.yaml` context in a cached system prompt → scoring tool call returning structured JSON (forced or auto per `scoring.force_tool_choice`, see Scoring Rules)
 13. Validate the model's tool input with a pydantic schema. Invalid response = failed job (skip, not written to sheet).
@@ -94,15 +102,32 @@ job-hunt-tools/
 ### title and company fields
 
 - **ATS-sourced jobs**: use the title and company from the ATS API response (structured, reliable).
-- **Search-sourced jobs**: use Haiku's extracted values (the search result snippet may not have clean title/company).
+- **Search-sourced jobs**: use the scoring model's extracted values (the search result snippet may not have clean title/company).
 
 ## Data Flow — email_finder
 
-1. Take LinkedIn URL as CLI arg
-2. Read existing LinkedIn URLs from "Contacts" sheet → skip if already present
-3. Call Apollo people/match (email only, no phone)
-4. If `--draft` flag → one Claude call for outreach line
-5. Append row to "Contacts" tab (even if email not found, to prevent re-lookups)
+0. **Sheet target**: email_finder runs only locally, so it writes to the TEST sheet in `.env` by default. Real use: `SHEET_ID=<prod id> python -m email_finder.main ...`.
+1. **Env check** (`main.py`): `SHEET_ID`, `GOOGLE_APPLICATION_CREDENTIALS`, plus the key of each enabled provider only (`PROSPEO_API_KEY`, `APIFY_TOKEN`, `APOLLO_API_KEY`); `ANTHROPIC_API_KEY` only with `--draft`. Any missing → one error naming all of them, exit 1. Then print `Writing to sheet: <title>`.
+2. **Input**: `python -m email_finder.main [urls ...] [--file PATH] [--draft]`. No URLs → read `email_finder/linkedin-profiles.txt` (gitignored; `linkedin-profiles.example.txt` is committed). One URL per line, `#` lines ignored, optional trailing `# note` → `notes` column.
+3. Read the "Contacts" header row once and map columns by header name; any missing header → fatal, nothing written. Read existing keys once (`get_existing_keys`): normalized `linkedin_url` values and lowercase `email` values. email_finder dedups on the URL set; the Task 9b import uses both.
+4. Normalize every input URL (`shared/linkedin_url.py`), keep only `/in/` profile URLs (others → `ignored <line> (not a profile URL)`), dedup within the input (later copies → `duplicate <url>`) and against the Contacts tab (already present → `exists`).
+5. `max_urls_per_run` (20) counts the URLs left after removing existing and in-input duplicates; more than that → exit 1 before any provider call.
+6. **Provider chain**: providers from `settings.yaml` `providers`, in order (default `[prospeo, apify]`; `apollo` available). Each provider runs once over all URLs still unmatched and passes its no-matches to the next.
+   - **Prospeo** — `POST https://api.prospeo.io/enrich-person`, header `X-KEY`, body `{"data": {"linkedin_url": ...}}`. One call per URL, `prospeo.timeout_seconds` (15), `prospeo.min_interval_seconds` (3.1) between calls — under 20/min for any cap (limits: 1/s, 20/min, 50/day; 100 free credits/month); hitting the 50/day limit returns 429, which the stop rule in step 7 covers. Match (`error: false`): email `person.email.email`, status `person.email.status`, name `person.full_name`, title `person.current_job_title`, company `company.name`; the response also has `person.mobile`, which is never read or stored. No match: `{"error": true, "error_code": "NO_MATCH"}`, or a match with an empty/null `person.email.email`, `person.email.revealed` false, or an email containing `*` (masked).
+   - **Apify** — actor `vulnv/linkedin-email-finder` via `POST https://api.apify.com/v2/acts/vulnv~linkedin-email-finder/run-sync-get-dataset-items`, header `Authorization: Bearer <APIFY_TOKEN>`, body `{"urls": [...]}`, HTTP 201. One actor run for all its URLs, `apify.timeout_seconds` (300). One item per URL (`name`, `company`, `domain`, `email`, `found`, `linkedin_url`; no status, no title), mapped back by normalized `linkedin_url`. No match: `found: false` with `error` exactly `"No email found in response"`. Pay per email found (~$0.026, from the $5/month free credit).
+   - **Apollo** (disabled; free plan returns 403 `API_INACCESSIBLE`) — `people/bulk_match` in batches of `apollo.batch_size` (10), `apollo.timeout_seconds` (15), `apollo.min_interval_seconds` (1.2) between batches, `reveal_personal_emails: false`, never phone. Returned records mapped by normalized `linkedin_url`; a submitted URL with no returned record is a no-match (unverified against a real response, see Open Risks).
+   - A no-match falls through to the next provider. Matched by none → row with blank `email`, `email_status` `"not found"`.
+   - `email_status` is stored as the provider returns it, lowercased; Apify rows get `"unverified"`.
+7. **Errors**: only the no-match cases above count as no-match. Anything else (non-2xx, other error codes, 401/403/429, timeout, malformed body, an Apify item missing for a submitted URL) stops the run: append the rows already resolved, do **not** write the unresolved URLs (retried next run), print which URLs are pending, exit 1.
+8. `--draft` → one Claude call per found row (`outreach_client.py`, `outreach.model` / `outreach.max_tokens`), using `config/candidate.md`. Never logged. A failed call → that row gets a blank `outreach_line` and a warning; the run continues. An Anthropic authentication / permission error → drafting stops, all rows are still appended, exit 1.
+9. Build row dicts: `email_source` = provider name; `contacted` blank; `date_found` = `YYYY-MM-DD HH:MM` in `timezone`, formatted inline with `zoneinfo`. **One append at the end** (or at the stop in step 7). Rows are written even when no email was found, to prevent re-lookups.
+10. **Output**: one line per input line — `ignored <line> (not a profile URL)`, `duplicate <url>`, or the URL + outcome (`exists` / `found via <provider> <status>` / `not found` / `pending`). Never print emails, names or keys. End with a summary line: input, ignored, duplicate, skipped existing, found per provider, not found, pending.
+
+**Clients** (`prospeo_client.py`, `apify_client.py`, `apollo_client.py`): one request per call, no retries, timeout passed in, never read settings. Keys only in headers (`X-KEY`, `Authorization: Bearer`, `x-api-key`), never in URLs or logs.
+
+**`email_finder/settings.yaml`**: `timezone`, `max_urls_per_run` (20), `providers`, `prospeo.timeout_seconds` (15), `prospeo.min_interval_seconds` (3.1), `apify.actor_id`, `apify.timeout_seconds` (300), `apollo.batch_size` (10), `apollo.timeout_seconds` (15), `apollo.min_interval_seconds` (1.2), `outreach.model`, `outreach.max_tokens`.
+
+**Legacy import** (Task 9b, one-off): `_scratch/import_legacy_contacts.py` (gitignored) copies old Apollo contacts from `_legacy/contacts-master-latest.json` into the Contacts tab with `email_source` `"apollo-legacy"`, using email_finder's Contacts repo. `email_status` = legacy `email_status`, else `email_confidence` (lowercased); `notes` joined with `"; "`; unparseable `contact_id` → blank `date_found`. Dedup key = normalized LinkedIn URL, else lowercase email (rows with an empty URL are imported); for duplicate keys the first row wins. Dry run by default, `--apply` to write.
 
 ## Sheet Schema
 
@@ -119,33 +144,43 @@ Columns are matched by header name (trimmed, case-insensitive), not position, so
 | Column | Type | Notes |
 |---|---|---|
 | applied | Checkbox | Code appends "" (blank). Marked by hand; never pre-fill checkboxes on empty rows (see Open Risks). Never overwritten by code. |
-| match_score | Number | 1.0–10.0 from Haiku (one decimal, e.g. 7.5) |
-| platform | String | ATS jobs: the ATS name (`greenhouse` / `lever` / `ashby`). Search jobs: `url_utils.platform_for_url` by host — `ashby`, `greenhouse` (also any URL with `gh_jid`), `lever`, `workable`, `wellfound`, `workatastartup`, `welcometothejungle`, `smartrecruiters`, `jobvite`, `breezy`, `a16z`, `workday`, `company_site` (big-company career hosts), else `other`. Older rows: `_scratch/backfill_platform.py`. |
+| match_score | Number | 1.0–10.0 from the scoring model (one decimal, e.g. 7.5) |
+| platform | String | ATS jobs: the ATS name (`greenhouse` / `lever` / `ashby`). Search jobs: `url_utils.platform_for_url` by host — `ashby`, `greenhouse` (also any URL with `gh_jid`), `lever`, `workable`, `wellfound`, `workatastartup`, `welcometothejungle`, `smartrecruiters`, `jobvite`, `breezy`, `a16z`, `workday`, `company_site` (big-company career hosts), else `other`. Older rows: `_scratch/backfill_platform.py` (local-only: gitignored, not in the repo). |
 | url | String | Normalized, used as dedup key |
-| title | String | From ATS source data when available; from Haiku for search results |
-| company | String | From ATS source data when available; from Haiku for search results |
+| title | String | From ATS source data when available; from the scoring model for search results |
+| company | String | From ATS source data when available; from the scoring model for search results |
 | location | String | Includes remote/hybrid/onsite as plain text |
-| visa_mention | String | From Haiku output |
+| visa_mention | String | From the scoring model's output |
 | jd_source | String | "full" (fetched JD or ATS API) or "snippet" (scored from search title + snippet) |
-| core_requirements | String | From Haiku output |
-| reason | String | One-line match reason from Haiku |
+| core_requirements | String | From the scoring model's output |
+| reason | String | One-line match reason from the scoring model |
 | posted_date | String | `YYYY-MM-DD`. ATS: from ATS API date field. Search: converted from Serper's relative `date` string using the run's start time. Blank if missing or unparseable. |
 | date_found | String | `YYYY-MM-DD HH:MM` (local time per `timezone` setting in settings.yaml). |
 | source_query | String | Which query or company found this job |
 
 ### Contacts tab
 
+Header row (tab-separated, paste into A1):
+
+```text
+contacted	name	company	title	email	email_status	email_source	linkedin_url	notes	outreach_line	date_found
+```
+
+Header-driven like Jobs: `CONTACTS_HEADERS` in `email_finder/sheets_repo.py` lists the 11 headers; columns are matched by header name (trimmed, case-insensitive) using `shared/sheets.header_positions`, so any order works. All 11 must exist or the run fails before writing anything. Rows are dicts keyed by header name; other columns stay blank. Appends use `RAW` + `INSERT_ROWS`.
+
 | Column | Type | Notes |
 |---|---|---|
 | contacted | Checkbox | Code appends "" (blank). Marked by hand; never pre-fill checkboxes on empty rows (see Open Risks). Never overwritten by code. |
-| name | String | From Apollo |
-| company | String | From Apollo |
-| title | String | From Apollo |
+| name | String | From the provider that matched (blank if not found) |
+| company | String | From the provider that matched (blank if not found) |
+| title | String | From the provider that matched; Apify returns no title, so blank for Apify rows |
 | email | String | Blank if not found |
-| email_status | String | verified / unverified / not found |
-| linkedin_url | String | Input URL, used as dedup key |
+| email_status | String | The provider's status as returned, lowercased (Prospeo `person.email.status`, Apollo `email_status`); `unverified` for Apify rows; `not found` when no provider matched; legacy rows: legacy `email_status`, else `email_confidence` |
+| email_source | String | Provider name: `prospeo` / `apify` / `apollo`; `apollo-legacy` for rows imported in Task 9b |
+| linkedin_url | String | Normalized input URL, used as dedup key (legacy rows may be blank; they dedup by lowercase email) |
+| notes | String | Optional trailing `# note` from the input file; for imported rows the legacy kind and `contacted YYYY-MM-DD`, joined with `"; "` |
 | outreach_line | String | Claude-drafted, blank if --draft not used |
-| date_found | String | `YYYY-MM-DD HH:MM` (local time per `timezone` setting in settings.yaml). |
+| date_found | String | `YYYY-MM-DD HH:MM` (local time per `timezone` in `email_finder/settings.yaml`). |
 
 ## Scoring Rules
 
@@ -158,7 +193,7 @@ Scorer receives two inputs: `config/candidate.md` (one-page evidence doc) and `c
 - **Score floor of 6** for early-career SWE/FDE/founding/product engineer roles (per `ai_evaluation` rules in `profile.yaml`). Only score below 6 when the JD clearly requires 3+ years AND targets mid/senior/staff/principal, or a hard blocker applies.
   - **Exception (3–5)**: the role's core is a specialty with no evidence in the candidate's background (e.g. embedded firmware, chip design), or the work is mostly outside general software engineering (e.g. QA-only, IT support, sales engineering).
 - **Personal rules live in `profile.yaml`**, not the prompt. The system prompt holds only generic rules (hard blockers, US location never a penalty, facts-only) plus a generic **score calibration** section: bands 9–10 / 7–8 / 6 / 3–5 / 1–2, how to apply them, one example job per band, and snippet-only rules. Personal specifics (F-1 OPT, the Seattle bonus) come from `profile.yaml`; on conflict, profile rules win.
-- **Prompt caching**: the system block (prompt + `candidate.md` + `profile.yaml`, ~4,600 tokens) is marked `cache_control: ephemeral`. Haiku 4.5's minimum cacheable prompt is 4,096 tokens, so the calibration section is padded with useful content, not filler. If both cache counters come back 0, the scorer logs a warning (prompt likely fell below the minimum).
+- **Prompt caching**: the system block (prompt + `candidate.md` + `profile.yaml`, ~6,900 tokens on Opus 5.5 (measured; varies by model tokenizer)) is marked `cache_control: ephemeral`. Haiku 4.5's minimum cacheable prompt is 4,096 tokens, so the calibration section is padded with useful content, not filler. If both cache counters come back 0, the scorer logs a warning (prompt likely fell below the minimum).
 - **Scoring model**: `scoring.model` in `settings.yaml`. **October 2026: Claude Opus (`claude-opus-5-5`)**; Haiku 4.5 and Sonnet 5.5 also work. Per-model prices (input, output, cache write, cache read per million tokens) live in the `prices` block.
 - **Tool call mode** (`scoring.force_tool_choice`, passed in by service): `true` → forced tool call (`tool_choice` = the scoring tool; Haiku). `false` → `tool_choice: auto`, `strict: true` on the tool, and "Always respond by calling the scoring tool." appended to the user message (Sonnet/Opus 5.5 reject a forced `tool_choice`). A response with no tool call = failed job.
 - **One tool schema for all models**: generated from the pydantic model with `additionalProperties: false` and no `minimum`/`maximum` (strict tools reject them).
@@ -182,12 +217,13 @@ Scorer receives two inputs: `config/candidate.md` (one-page evidence doc) and `c
   - every scoring attempt failed (nothing written)
 - **Single append at the end**: rows are written in one append after all scoring, so a crash mid-run writes nothing.
 - **Summary line** printed at the end of every run.
+- **email_finder**: no-match is only Prospeo `NO_MATCH` or a Prospeo match with an empty/null, unrevealed (`revealed` false) or masked (contains `*`) email, Apify `found: false` + `"No email found in response"`, or Apollo returning no record for the URL. A failed `--draft` call leaves that row's `outreach_line` blank with a warning; an Anthropic auth/permission error stops drafting, appends all rows, exits 1. Any other provider error stops the run: rows already resolved are appended, unresolved URLs are not written (retried next run) and are printed as `pending`, exit 1. Missing env vars, a missing Contacts header, or more than `max_urls_per_run` URLs → exit 1 before any provider call.
 
 ## Logging
 
 - **Storage**: console output only, kept by GitHub Actions in the run log (90-day default retention). No Runs/Errors tab, no log files, no artifacts.
 - **Never log** JD text, `profile.yaml` / `candidate.md` contents, or secrets. Failed-job lines show the URL + error type + the exception message on one line, truncated to 150 characters.
-- **Fixed prefixes**: key lines start with a fixed uppercase prefix so a month of logs can be grepped: `RUN`, `ATS`, `QUERY`, `FUNNEL`, `DROP`, `JD`, `FAIL`, `SCORES`, `COST`.
+- **Fixed prefixes**: key lines start with a fixed uppercase prefix so a month of logs can be grepped: `RUN`, `ATS`, `QUERY`, `FUNNEL`, `DROP`, `JD`, `FAIL`, `SCORES`, `COST`, `ASHBY`.
 - **What each run logs**:
 
 | Prefix | Content |
@@ -199,6 +235,7 @@ Scorer receives two inputs: `config/candidate.md` (one-page evidence doc) and `c
 | `FUNNEL` | found, dupes (sheet), dupes (in-run), no URL, new, title dropped, location dropped, eligible, over cap, experience dropped |
 | `DROP` | One line per filtered job. Title drops: the matched exclude keyword, or `no include match`. Location drops: the matched keyword and where it matched (`location` / `title` / `url`). Experience drops: `DROP experience N \| <phrase> \| <title> \| <url>`. Over-cap jobs: `DROP cap` lines with titles, only when the over-cap count > 0. Any `\|` inside a title is written as `/` so the ` \| ` separators stay parseable |
 | `JD` | Source counts: full fetched, snippet fallback, ATS full |
+| `ASHBY` | A search-found Ashby job whose board was unavailable or whose job id was not on the board; it falls back to a plain page fetch |
 | `SCORES` | Histogram: 8–10, 6–7.9, 3–5.9, 1–2.9 |
 | `COST` | Tokens: input, output, cache read, cache write; estimated cost from per-model prices in `settings.yaml` (never hardcoded) |
 | `RUN` (end) | Elapsed time |
@@ -209,11 +246,12 @@ Scorer receives two inputs: `config/candidate.md` (one-page evidence doc) and `c
 ## Secrets
 
 - **Locally**: `.env` file (gitignored), loaded with `python-dotenv`. Service account JSON is a gitignored file; `.env` holds its path via `GOOGLE_APPLICATION_CREDENTIALS`.
-- **Local .env only ever contains the TEST sheet ID.** The real (production) sheet ID exists only in GitHub secrets. There is no `--test` flag: the environment decides which sheet is used, so a local run can never write to the real sheet.
+- **Local .env only ever contains the TEST sheet ID.** The real (production) sheet ID exists only in GitHub secrets. There is no `--test` flag: the environment decides which sheet is used, so a local run writes to TEST unless the prod ID is passed explicitly. The only intended local prod writes are email_finder and the Task 9b import, via a `SHEET_ID=<prod id>` command prefix (never stored in `.env`).
 - **CI**: GitHub Actions secrets, injected as env vars. Service account JSON stored as base64-encoded secret, decoded at runtime.
 - **Gitignored personal files** (`config/profile.yaml`, `config/candidate.md`): stored as GitHub secrets (base64), decoded to files at runtime. `.example` versions committed to show the format.
 - **Google Sheet ID**: env var (`SHEET_ID`), not hardcoded.
 - **SERPER_API_KEY**: env var for the Serper search API.
+- **email_finder keys** (`PROSPEO_API_KEY`, `APIFY_TOKEN`, optional `APOLLO_API_KEY`): local `.env` only (email_finder does not run in CI). Sent only in request headers, never in URLs or logs.
 - **Never print secrets or file contents in logs.**
 
 ## Testing
@@ -241,7 +279,7 @@ Scorer receives two inputs: `config/candidate.md` (one-page evidence doc) and `c
 | No NVIDIA path lowercasing | Risks breaking case-sensitive links |
 | Logs: console only, no new storage | GitHub keeps run logs 90 days; a Runs/Errors tab is out of scope for v1 |
 | `ats_client.py` separate from `jd_client.py` | One client per external system: ats_client handles Greenhouse/Lever/Ashby APIs (list call returns jobs with JD text, one call per company); jd_client handles plain HTTP fetches for search-sourced job pages |
-| title/company from source when available | ATS APIs return structured data; Haiku extraction only needed for search results |
+| title/company from source when available | ATS APIs return structured data; scoring-model extraction only needed for search results |
 | Pydantic validation on scorer output | Catches malformed model responses before they hit the sheet |
 | Scoring model is a setting; tool mode is a setting (`force_tool_choice`) | Sonnet/Opus 5.5 reject a forced `tool_choice`; one code path supports both. Opus for October |
 | `config/` at repo root, gitignored | Personal files (profile.yaml, candidate.md) stay out of repo; .example versions document format |
@@ -249,7 +287,9 @@ Scorer receives two inputs: `config/candidate.md` (one-page evidence doc) and `c
 | Append-only sheet writes | User's checkboxes and manual edits must survive every run |
 | Code appends "" (blank) for checkbox columns | Pre-filled checkboxes on empty rows count as data, so the append API writes after them (row 1001 in Task 1 testing). Checkboxes are never pre-filled; marking applied/contacted is manual |
 | No `remote` column | User is open to all work modes; included in location text |
-| Write "not found" email rows | Prevents re-spending Apollo credits on same person |
+| Write "not found" email rows | Prevents re-spending provider credits on the same person |
+| Email providers: Prospeo → Apify, Apollo optional (`providers` in `email_finder/settings.yaml`) | Oct 5 2026 tests: Prospeo is free (100 credits/month) and returns an email status; Apify's `vulnv/linkedin-email-finder` catches Prospeo's no-matches, pay per email found (~$0.026) from the $5/month free credit, but returns no status or title (rows marked `unverified`). Apollo `people/match` and `bulk_match` return 403 `API_INACCESSIBLE` on the free plan, so it stays a disabled provider for a future paid plan |
+| email_finder stops on unexpected provider errors; unresolved URLs not written | Only a real no-match becomes a "not found" row, so a bad key, 429 or outage never marks people as not found; pending URLs are retried next run |
 | Score cap applied after dedup + title filter + location filter | Cap counts real US-based SWE candidates, not noise |
 | Senior/Sr excluded in title filter and queries | Oct 2026 sheet review: mostly wasted scoring |
 | Newest jobs scored first | If capped, better to score fresh postings |
@@ -270,7 +310,10 @@ Scorer receives two inputs: `config/candidate.md` (one-page evidence doc) and `c
 - **ATS API rate limits**: Greenhouse/Lever/Ashby public APIs may have undocumented rate limits. If companies.yaml grows large, requests may get throttled.
 - **ATS slug drift**: company slugs in companies.yaml can change if a company rebrands or migrates ATS. Broken slugs fail silently (empty results, not errors). Periodic manual check needed.
 - **JD fetch failures**: some company career pages block automated requests or require JavaScript. No headless browser is in scope — those jobs fall back to snippet-based scoring instead.
-- **Apollo credit burn**: each people/match call costs credits. No cap is built into email_finder (it's manual and one-at-a-time, so you're the cap).
+- **Email provider quotas**: Prospeo free plan is 100 credits/month and 50 enrich calls/day (1/s, 20/min); Apify spends ~$0.026 per email found from the $5/month free credit. `max_urls_per_run` (20) caps one run and `prospeo.min_interval_seconds` (3.1) keeps under 20/min; the 50/day limit returns 429, which stops the run with the remaining URLs pending.
+- **Apollo bulk_match mapping unverified**: records are mapped by returned normalized `linkedin_url` and a missing record counts as no-match, based on Apollo's docs and a synthetic fixture only (the free plan returns 403). Verify against a real response before adding `apollo` to `providers`.
+- **Legacy rows without a URL**: email_finder dedups only on `linkedin_url`, so a legacy contact imported in Task 9b with a blank URL does not block a later lookup of the same person; that lookup spends a credit and can add a second row for them (same email). Check by hand if it matters.
+- **Outdated email domains**: providers can return an email at a company's old domain after a rebrand. Check manually when the email domain differs from the company's current site.
 - **Sheet row limits**: Google Sheets caps at ~10M cells. Not a near-term risk, but if you never clean up, the sheet grows forever.
 - **Snippet-based scores are less reliable**: when the full JD can't be fetched, scoring from title + snippet may miss requirements or benefits. The `jd_source` column lets you see which scores are snippet-based.
 - **Scorer output consistency**: tool call (forced, or strict + auto) + pydantic validation catches malformed responses. In auto mode the model could skip the tool; that response counts as a failed job. Invalid responses are skipped and retried next run.

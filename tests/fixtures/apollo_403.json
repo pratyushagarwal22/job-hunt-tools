@@ -1,0 +1,20 @@
+{
+  "error": "The api/v1/people/match API is not included in your Free plan and is not accessible, even with a master key. All paid plans include full API access. Upgrade your plan from https://www.apollo.io/pricing",
+  "error_code": "API_INACCESSIBLE",
+  "error_details": {
+    "code": "AUTH.AUTHORIZATION.ENDPOINT_ACCESS_DENIED",
+    "message": "Your team is not permitted to call this endpoint.",
+    "suggestions": [
+      {
+        "label": "Contact support@example.com if you need access to this endpoint",
+        "url": "https://help.example.com"
+      }
+    ],
+    "context": {
+      "endpoint": {
+        "value": "api/v1/people/match",
+        "description": "The endpoint your request named"
+      }
+    }
+  }
+}

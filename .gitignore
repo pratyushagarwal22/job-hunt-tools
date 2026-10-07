@@ -8,6 +8,7 @@ credentials*.json
 config/profile.yaml
 config/candidate.md
 docs/PROJECT_CONTEXT.md
+email_finder/linkedin-profiles.txt
 
 # Old inputs, never commit
 _legacy/

@@ -2,7 +2,7 @@
 
 ## What this does
 
-Two small Python tools that feed one Google Sheet. **`job_scanner`** (live) runs twice a day on GitHub Actions: it polls tracked company boards on Greenhouse, Lever and Ashby, runs `site:` searches through the Serper API, dedups against the sheet, drops jobs by title, location and required years of experience, scores the rest with Claude against your profile, and appends the scored rows to the sheet's `Jobs` tab. **`email_finder`** (planned, not built yet) will be a manual CLI that takes a LinkedIn URL, looks up an email through Apollo, optionally drafts an outreach line, and appends it to the `Contacts` tab.
+Two small Python tools that feed one Google Sheet. **`job_scanner`** (live) runs twice a day on GitHub Actions: it polls tracked company boards on Greenhouse, Lever and Ashby, runs `site:` searches through the Serper API, dedups against the sheet, drops jobs by title, location and required years of experience, scores the rest with Claude against your profile, and appends the scored rows to the sheet's `Jobs` tab. **`email_finder`** (planned, not built yet) will be a manual CLI that takes LinkedIn profile URLs (arguments or `email_finder/linkedin-profiles.txt`), looks up each email through Prospeo and then Apify for Prospeo's misses (Apollo is supported but disabled; its API needs a paid plan), optionally drafts an outreach line, and appends one row per URL to the `Contacts` tab.
 
 All commands below are run from the repo root with the virtual environment active.
 
@@ -57,9 +57,9 @@ deactivate
 cp .env.example .env
 ```
 
-Fill in `SERPER_API_KEY`, `ANTHROPIC_API_KEY` and `SHEET_ID`. **`SHEET_ID` in `.env` is always the TEST sheet ID.** The production sheet ID lives only in GitHub secrets, so a local run can never write to the real sheet. There is no `--test` flag; the environment decides which sheet is used. Every run prints `Writing to sheet: <title>` first so you can see which sheet it hit.
+Fill in `SERPER_API_KEY`, `ANTHROPIC_API_KEY` and `SHEET_ID`. **`SHEET_ID` in `.env` is always the TEST sheet ID.** The production sheet ID lives only in GitHub secrets, so a local run writes to TEST unless you pass the production ID yourself. There is no `--test` flag; the environment decides which sheet is used. The planned `email_finder` runs only locally, so it writes to TEST by default; for real use, prefix the command with the production ID: `SHEET_ID=<prod id> python -m email_finder.main ...` (never put the production ID in `.env`). Every run prints `Writing to sheet: <title>` first so you can see which sheet it hit.
 
-`GOOGLE_APPLICATION_CREDENTIALS=service_account.json` is already set in the example. `APOLLO_API_KEY` is for the planned `email_finder` and is not needed yet.
+`GOOGLE_APPLICATION_CREDENTIALS=service_account.json` is already set in the example. `PROSPEO_API_KEY` and `APIFY_TOKEN` are for the planned `email_finder` and are not needed yet. `APOLLO_API_KEY` is optional (paid Apollo plan only).
 
 ### 3. Personal config files
 
@@ -92,12 +92,12 @@ Create the TEST and production sheets with the same layout. Row 1 holds the head
 applied	match_score	platform	url	title	company	location	visa_mention	jd_source	core_requirements	reason	posted_date	date_found	source_query
 ```
 
-The scanner matches `Jobs` columns by header name (trimmed, case-insensitive), not by position, so they can be in any order and you can add your own. All 14 headers above must exist in row 1; if any is missing, the run stops with an error naming the missing headers and nothing is written. Columns with other headers are left blank on new rows. `platform` is the job board or ATS (`greenhouse`, `lever`, `ashby`, `workday`, `company_site`, …, else `other`); to fill it on older rows, run `python _scratch/backfill_platform.py` (dry run) and then with `--apply`.
+The scanner matches `Jobs` columns by header name (trimmed, case-insensitive), not by position, so they can be in any order and you can add your own. All 14 headers above must exist in row 1; if any is missing, the run stops with an error naming the missing headers and nothing is written. Columns with other headers are left blank on new rows. `platform` is the job board or ATS (`greenhouse`, `lever`, `ashby`, `workday`, `company_site`, …, else `other`); to fill it on older rows, run `python _scratch/backfill_platform.py` (dry run) and then with `--apply`. That script is local-only: `_scratch/` is gitignored, so it is not in the repo.
 
-`Contacts` tab (columns A–I, used by the planned `email_finder`):
+`Contacts` tab (11 columns, A–K, used by the planned `email_finder`; matched by header name like `Jobs`, and all 11 must exist):
 
 ```text
-contacted	name	company	title	email	email_status	linkedin_url	outreach_line	date_found
+contacted	name	company	title	email	email_status	email_source	linkedin_url	notes	outreach_line	date_found
 ```
 
 The values above are tab-separated, so you can paste the line into cell A1.
@@ -273,10 +273,10 @@ gh run list --workflow scan.yaml
 gh run view <id> --log
 ```
 
-Export the key lines from the last 30 runs into one file for review:
+Export the key lines from the last 60 runs into one file for review:
 
 ```bash
-gh run list --workflow scan.yaml --limit 30 --json databaseId -q '.[].databaseId' | xargs -I{} gh run view {} --log | grep -E "DROP|QUERY|FUNNEL|SCORES|COST" > review.txt
+gh run list --workflow scan.yaml --limit 60 --json databaseId -q '.[].databaseId' | xargs -I{} gh run view {} --log | grep -E "RUN|ATS|QUERY|FUNNEL|DROP|JD|FAIL|SCORES|COST|ASHBY" > review.txt
 ```
 
 Like `run.log`, `review.txt` is gitignored; delete it when done to keep the folder tidy.
@@ -361,10 +361,10 @@ ATS polling (Greenhouse, Lever, Ashby) uses free public APIs.
 Confirm every secret and personal path is ignored:
 
 ```bash
-git check-ignore -v .env service_account.json config/profile.yaml config/candidate.md _legacy docs/PROJECT_CONTEXT.md .venv
+git check-ignore -v .env service_account.json config/profile.yaml config/candidate.md _legacy _scratch docs/PROJECT_CONTEXT.md .venv email_finder/linkedin-profiles.txt
 ```
 
-Expect **7 lines**, one `.gitignore` rule per path. A missing line means that path is not ignored; fix `.gitignore` before committing.
+Expect **9 lines**, one `.gitignore` rule per path. A missing line means that path is not ignored; fix `.gitignore` before committing.
 
 Then review exactly what will be committed:
 
@@ -381,7 +381,9 @@ These must never appear in `git status` or a commit:
 - `config/candidate.md`
 - `docs/PROJECT_CONTEXT.md`
 - anything under `_legacy/`
+- anything under `_scratch/`
 - anything under `.venv/`
+- `email_finder/linkedin-profiles.txt`
 - `run.log` and `review.txt` (gitignored, but worth a glance since they hold full run logs)
 
 ## Architecture

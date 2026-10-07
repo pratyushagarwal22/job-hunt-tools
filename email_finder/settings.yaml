@@ -1,0 +1,27 @@
+# email_finder settings — committed to repo. Keys live in .env, never here.
+
+timezone: America/Chicago
+
+# Counted after removing URLs already in the Contacts tab and in-input duplicates.
+max_urls_per_run: 20
+
+# Run in this order; each provider gets the previous one's no-matches.
+# apollo is available but needs a paid plan (free plan returns 403 API_INACCESSIBLE).
+providers: [prospeo, apify]
+
+prospeo:
+  timeout_seconds: 15
+  min_interval_seconds: 3.1  # limits 1/s, 20/min, 50/day; 3.1s keeps under 20/min
+
+apify:
+  actor_id: vulnv/linkedin-email-finder
+  timeout_seconds: 300  # one synchronous actor run for all URLs
+
+apollo:
+  batch_size: 10
+  timeout_seconds: 15
+  min_interval_seconds: 1.2
+
+outreach:
+  model: claude-opus-5-5
+  max_tokens: 300

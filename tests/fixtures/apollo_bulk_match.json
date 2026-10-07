@@ -1,0 +1,47 @@
+{
+  "_comment": "SYNTHETIC fixture: not a real Apollo response (the free plan returns 403). Built from Apollo's documented people/bulk_match response shape; all values are fake. Verify against a real response before enabling the apollo provider.",
+  "status": "success",
+  "error_code": null,
+  "error_message": null,
+  "total_requested_enrichments": 3,
+  "unique_enriched_records": 2,
+  "missing_records": 1,
+  "credits_consumed": 2,
+  "matches": [
+    {
+      "id": "000000000000000000000001",
+      "first_name": "Jane",
+      "last_name": "Doe",
+      "name": "Jane Doe",
+      "linkedin_url": "http://www.linkedin.com/in/jane-doe-example",
+      "title": "Software Engineer",
+      "email_status": "verified",
+      "email": "jane.doe@example.com",
+      "organization_id": "000000000000000000000101",
+      "organization": {
+        "id": "000000000000000000000101",
+        "name": "Example Corp",
+        "website_url": "http://www.example.com",
+        "primary_domain": "example.com"
+      }
+    },
+    null,
+    {
+      "id": "000000000000000000000002",
+      "first_name": "Alex",
+      "last_name": "Poe",
+      "name": "Alex Poe",
+      "linkedin_url": "http://www.linkedin.com/in/alex-poe-example",
+      "title": "Engineering Manager",
+      "email_status": "extrapolated",
+      "email": "alex.poe@example.org",
+      "organization_id": "000000000000000000000102",
+      "organization": {
+        "id": "000000000000000000000102",
+        "name": "Sample Labs",
+        "website_url": "http://www.example.org",
+        "primary_domain": "example.org"
+      }
+    }
+  ]
+}
