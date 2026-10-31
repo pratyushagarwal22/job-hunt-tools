@@ -19,7 +19,7 @@ jd_min_chars: 500
 timezone: America/Chicago
 
 scoring:
-  model: claude-opus-5-5
+  model: claude-sonnet-5-5
   # true: forced tool call (Haiku). false: tool_choice auto + strict tool, for models that
   # reject a forced tool_choice (Sonnet/Opus 5.5).
   force_tool_choice: false
