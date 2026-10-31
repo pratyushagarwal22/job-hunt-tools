@@ -11,6 +11,8 @@ from job_scanner import ats_client
 from job_scanner.ats_client import (
     AtsError,
     get_ashby_board,
+    get_greenhouse_job,
+    get_lever_job,
     list_ashby_jobs,
     list_greenhouse_jobs,
     list_lever_jobs,
@@ -266,6 +268,7 @@ def test_get_ashby_board_returns_all_jobs_ignoring_age():
     assert [b["url"] for b in board] == [j["jobUrl"] for j in raw["jobs"]]
     assert board[0]["jd_text"] == raw["jobs"][0]["descriptionPlain"].strip()
     assert board[1]["jd_text"] and "<" not in board[1]["jd_text"]
+    assert [b["location"] for b in board] == [j["location"] for j in raw["jobs"]]
 
 
 def test_get_ashby_board_errors_raise_ats_error():
@@ -276,6 +279,46 @@ def test_get_ashby_board_errors_raise_ats_error():
     with patch.object(ats_client.requests, "get", side_effect=requests.Timeout("slow")):
         with pytest.raises(AtsError) as info:
             get_ashby_board("acme")
+    assert info.value.detail == "Timeout"
+
+
+def test_get_greenhouse_job_parses_jd_and_location():
+    item = _load("greenhouse_list.json")["jobs"][0]
+    with patch.object(ats_client.requests, "get", return_value=_response(item)) as get:
+        job = get_greenhouse_job("anthropic", item["id"], timeout=7)
+
+    assert get.call_args.args[0] == (
+        f"https://boards-api.greenhouse.io/v1/boards/anthropic/jobs/{item['id']}"
+    )
+    assert get.call_args.kwargs["timeout"] == 7
+    assert job["location"] == item["location"]["name"]
+    assert job["jd_text"] and "<" not in job["jd_text"]
+    assert "Anthropic" in job["jd_text"]
+
+
+def test_get_lever_job_parses_jd_and_location():
+    item = _load("lever_list.json")[0]
+    with patch.object(ats_client.requests, "get", return_value=_response(item)) as get:
+        job = get_lever_job("palantir", item["id"], timeout=9)
+
+    assert get.call_args.args[0] == (
+        f"https://api.lever.co/v0/postings/palantir/{item['id']}"
+    )
+    assert get.call_args.kwargs["timeout"] == 9
+    assert job["location"] == item["categories"]["location"]
+    assert "World-Changing Company" in job["jd_text"]
+    assert "Provide administrative support" in job["jd_text"]
+
+
+@pytest.mark.parametrize("fn,job_id", [(get_greenhouse_job, 123), (get_lever_job, "abc")])
+def test_single_job_errors_raise_ats_error(fn, job_id):
+    with patch.object(ats_client.requests, "get", return_value=_response({}, 404)):
+        with pytest.raises(AtsError) as info:
+            fn("acme", job_id)
+    assert info.value.detail == "HTTP 404"
+    with patch.object(ats_client.requests, "get", side_effect=requests.Timeout("slow")):
+        with pytest.raises(AtsError) as info:
+            fn("acme", job_id)
     assert info.value.detail == "Timeout"
 
 

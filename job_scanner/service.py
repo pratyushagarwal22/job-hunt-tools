@@ -6,6 +6,7 @@ import re
 import time
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import parse_qs, unquote, urlsplit
 from zoneinfo import ZoneInfo
 
 import anthropic
@@ -37,6 +38,11 @@ _ATS_LISTERS = {
 }
 
 _ASHBY_JOB_URL = re.compile(r"^https?://jobs\.ashbyhq\.com/([^/?#]+)/([0-9a-f-]{36})", re.I)
+_GREENHOUSE_JOB_URL = re.compile(r"^https?://[^/]*greenhouse\.io/([^/?#]+)/jobs/(\d+)", re.I)
+_LEVER_JOB_URL = re.compile(r"^https?://jobs\.lever\.co/([^/?#]+)/([0-9a-f-]{36})", re.I)
+_SITE_DOMAIN = re.compile(r"site:([^/\s]+)", re.I)
+_GOOGLE_REDIRECT_HOSTS = {"google.com", "www.google.com"}
+_UNRESOLVED = object()
 
 _FAIL_MESSAGE_CHARS = 150
 
@@ -77,14 +83,17 @@ def run_pipeline(max_jobs: int | None) -> dict:
     )
 
     ats_jobs = _collect_ats_jobs(config["companies"], settings)
-    search_jobs, query_stats, serper_calls = _collect_search_jobs(
+    search_jobs, query_stats, serper_calls, offsite, unwrapped, redirects = _collect_search_jobs(
         config["queries"] + config["company_sites"], settings
     )
+    _warn_unresolved_redirects(redirects, sum(stat["results"] for stat in query_stats))
     candidates = ats_jobs + search_jobs
 
     new_jobs, dedup_counts = _dedup(candidates, existing_urls)
-    funnel = dict(found=len(candidates), **dedup_counts, new=len(new_jobs),
-                  title_dropped=0, location_dropped=0)
+    funnel = dict(
+        found=len(candidates) + redirects + offsite, redirect=redirects, offsite=offsite,
+        **dedup_counts, new=len(new_jobs), title_dropped=0, location_dropped=0,
+    )
     kept = []
     for job in new_jobs:
         stage = _drop_stage(job, settings)
@@ -93,7 +102,7 @@ def run_pipeline(max_jobs: int | None) -> dict:
             kept.append(job)
         else:
             funnel[f"{stage}_dropped"] += 1
-    _log_queries(query_stats, new_jobs, serper_calls)
+    _log_queries(query_stats, new_jobs, serper_calls, unwrapped)
 
     for job in kept:
         job["posted"] = _parse_posted(job, run_start, tz_name)
@@ -110,12 +119,16 @@ def run_pipeline(max_jobs: int | None) -> dict:
     usages = []
     jd_counts = dict(full_fetched=0, snippet=0, ats_full=0)
     experience_dropped = 0
+    location_post = 0
     failed = 0
     ashby_boards = {}
     for job in to_score:
         try:
-            jd_text, jd_source = _get_jd(job, settings, ashby_boards)
+            jd_text, jd_source, ats_location = _get_jd(job, settings, ashby_boards)
             jd_counts[_jd_kind(job, jd_source)] += 1
+            if _drop_ats_location(job, ats_location, settings):
+                location_post += 1
+                continue
             years, phrase = experience_filter.required_years(jd_text)
             if years is not None and years > max_years:
                 experience_dropped += 1
@@ -133,6 +146,7 @@ def run_pipeline(max_jobs: int | None) -> dict:
 
     funnel.update(
         eligible=len(ordered),
+        location_post=location_post,
         over_cap=len(over_cap),
         experience_dropped=experience_dropped,
         scored=len(rows),
@@ -153,24 +167,30 @@ def run_pipeline(max_jobs: int | None) -> dict:
     return dict(
         found=funnel["found"],
         new=funnel["new"],
-        filtered=funnel["title_dropped"] + funnel["location_dropped"] + experience_dropped,
+        filtered=(funnel["title_dropped"] + funnel["location_dropped"]
+                  + funnel["location_post"] + experience_dropped),
         scored=len(rows),
         failed=failed,
         skipped_cap=len(over_cap),
     )
 
 
-def _collect_search_jobs(queries: list[dict], settings: dict) -> tuple[list[dict], list[dict], int]:
-    """Returns (jobs, per-query stats, Serper requests sent)."""
+def _collect_search_jobs(
+    queries: list[dict], settings: dict
+) -> tuple[list[dict], list[dict], int, int, int, int]:
+    """Returns jobs, stats, Serper calls, off-site drops, unwraps, unresolved redirects."""
     search_cfg = settings["search"]
     jobs = []
     stats = []
     calls = 0
+    offsite = 0
+    unwrapped = 0
+    redirects = 0
     for entry in queries:
         if not entry.get("enabled", True):
             continue
         query = entry["query"]
-        stat = dict(name=entry.get("name") or query, pages=0, results=0)
+        stat = dict(name=entry.get("name") or query, pages=0, results=0, redirect=0, offsite=0)
         index = len(stats)
         stats.append(stat)
         for page in range(1, settings["max_pages_per_query"] + 1):
@@ -191,7 +211,29 @@ def _collect_search_jobs(queries: list[dict], settings: dict) -> tuple[list[dict
             if not results:
                 break
             stat["results"] += len(results)
+            domain = _site_domain(query)
             for result in results:
+                link = result.get("link") or ""
+                target = _unwrap_google_redirect(link)
+                if target is _UNRESOLVED:
+                    redirects += 1
+                    stat["redirect"] += 1
+                    logger.info(
+                        "DROP redirect | %s | %s",
+                        (result.get("title") or "").replace("|", "/"), link,
+                    )
+                    continue
+                if target is not None:
+                    unwrapped += 1
+                    link = target
+                if domain and not _host_matches(link, domain):
+                    offsite += 1
+                    stat["offsite"] += 1
+                    logger.info(
+                        "DROP offsite | %s | %s",
+                        (result.get("title") or "").replace("|", "/"), link,
+                    )
+                    continue
                 jobs.append(
                     dict(
                         is_ats=False,
@@ -199,7 +241,7 @@ def _collect_search_jobs(queries: list[dict], settings: dict) -> tuple[list[dict
                         company="",
                         location=None,
                         snippet=result.get("snippet") or "",
-                        url=result.get("link") or "",
+                        url=link,
                         raw_date=result.get("date") or "",
                         jd_text=None,
                         source_query=query,
@@ -209,7 +251,7 @@ def _collect_search_jobs(queries: list[dict], settings: dict) -> tuple[list[dict
                 )
     if stats and not any(stat["pages"] for stat in stats):
         raise RuntimeError(f"Every search query failed ({len(stats)} queries)")
-    return jobs, stats, calls
+    return jobs, stats, calls, offsite, unwrapped, redirects
 
 
 def _collect_ats_jobs(companies: list[dict], settings: dict) -> list[dict]:
@@ -305,12 +347,71 @@ def _drop_stage(job: dict, settings: dict) -> str | None:
     return None
 
 
+def _drop_ats_location(job: dict, location: str | None, settings: dict) -> bool:
+    """True when a structured ATS location is outside the US."""
+    if not location:
+        return False
+    location_cfg = settings["location_filter"]
+    hit = location_drop_reason(
+        location, job["title"], job.get("raw_url") or job["url"],
+        location_cfg["exclude"], is_ats=True, us_signals=location_cfg.get("us_signals") or [],
+    )
+    if hit is None:
+        return False
+    logger.info("DROP location %s (ats-location) | %s | %s", hit[0], _log_title(job), job["url"])
+    return True
+
+
+def _site_domain(query: str) -> str | None:
+    match = _SITE_DOMAIN.search(query)
+    return match.group(1).lower() if match else None
+
+
+def _unwrap_google_redirect(url: str):
+    """http(s) target of a google /url link, _UNRESOLVED for an opaque redirect, else None.
+
+    /goto tokens are never URLs. /url is unwrapped only when url or q starts with http.
+    """
+    parts = urlsplit(url)
+    host = (parts.hostname or "").lower()
+    if host not in _GOOGLE_REDIRECT_HOSTS:
+        return None
+    if parts.path == "/goto":
+        return _UNRESOLVED
+    if parts.path != "/url":
+        return None
+    params = parse_qs(parts.query)
+    for key in ("url", "q"):
+        values = params.get(key) or []
+        if not values:
+            continue
+        target = unquote(values[0]).strip()
+        if target.startswith("http"):
+            return target
+        return _UNRESOLVED
+    return _UNRESOLVED
+
+
+def _warn_unresolved_redirects(redirects: int, results: int) -> None:
+    if results and redirects * 10 > results * 3:
+        logger.warning(
+            "SEARCH %d of %d results are unresolved Google /goto redirects "
+            "(Serper-side issue); those jobs are skipped this run.",
+            redirects, results,
+        )
+
+
+def _host_matches(url: str, domain: str) -> bool:
+    host = (urlsplit(url).hostname or "").lower()
+    return host == domain or host.endswith("." + domain)
+
+
 def _log_title(job: dict) -> str:
     """Title for DROP lines; "|" would break the " | " field separators."""
     return job["title"].replace("|", "/")
 
 
-def _log_queries(stats: list[dict], new_jobs: list[dict], serper_calls: int) -> None:
+def _log_queries(stats: list[dict], new_jobs: list[dict], serper_calls: int, unwrapped: int) -> None:
     for stat in stats:
         stat.update(new=0, passed=0, late=0)
     for job in new_jobs:
@@ -324,10 +425,13 @@ def _log_queries(stats: list[dict], new_jobs: list[dict], serper_calls: int) -> 
                 stat["late"] += 1
     for stat in stats:
         logger.info(
-            "QUERY %s | pages %d | results %d | new %d | passed %d | new+passed from page 2+ %d",
-            stat["name"], stat["pages"], stat["results"], stat["new"], stat["passed"], stat["late"],
+            "QUERY %s | pages %d | results %d | redirect %d | off-site %d | new %d | passed %d"
+            " | new+passed from page 2+ %d",
+            stat["name"], stat["pages"], stat["results"], stat["redirect"], stat["offsite"],
+            stat["new"], stat["passed"], stat["late"],
         )
     logger.info("QUERY total Serper calls %d", serper_calls)
+    logger.info("QUERY total unwrapped google redirects %d", unwrapped)
 
 
 def _parse_posted(job: dict, run_start: datetime, tz_name: str) -> datetime | None:
@@ -342,37 +446,62 @@ def _newest_first(jobs: list[dict]) -> list[dict]:
     return sorted(dated, key=lambda job: job["posted"], reverse=True) + undated
 
 
-def _get_jd(job: dict, settings: dict, ashby_boards: dict) -> tuple[str, str]:
+def _get_jd(job: dict, settings: dict, ashby_boards: dict) -> tuple[str, str, str | None]:
     """Full JD when available, else title + snippet (search) or title + location (ATS).
 
+    The third value is a structured location from an ATS posting API, or None.
     `ashby_boards` caches Ashby boards by slug for the run (None = board could not be fetched).
     """
     if job["is_ats"]:
         if job["jd_text"]:
-            return job["jd_text"], "full"
-        return f"{job['title']}\n{job['location']}", "snippet"
-    ashby_text = _ashby_jd(job["url"], settings, ashby_boards)
-    if ashby_text:
-        return ashby_text, "full"
+            return job["jd_text"], "full", None
+        return f"{job['title']}\n{job['location']}", "snippet", None
+    fetched = _search_ats_posting(job["url"], settings, ashby_boards)
+    location = None
+    if fetched is not None:
+        text, location = fetched
+        if text:
+            return text, "full", location
     jd_text, jd_source = jd_client.fetch_jd(
         job["url"], settings["request_timeout_seconds"], settings["jd_min_chars"]
     )
     if jd_source != "full" or not jd_text:
-        return f"{job['title']}\n{job['snippet']}", "snippet"
-    return jd_text, jd_source
+        return f"{job['title']}\n{job['snippet']}", "snippet", location
+    return jd_text, jd_source, location
 
 
-def _ashby_jd(url: str, settings: dict, ashby_boards: dict) -> str | None:
-    """JD text from the Ashby posting API for a jobs.ashbyhq.com/<slug>/<id> URL, else None."""
-    match = _ASHBY_JOB_URL.match(url)
-    if match is None:
+def _search_ats_posting(url: str, settings: dict, ashby_boards: dict) -> tuple[str, str | None] | None:
+    """(jd_text, location) from Ashby, Greenhouse, or Lever. None means fall back with no location."""
+    timeout = settings["request_timeout_seconds"]
+    ashby = _ASHBY_JOB_URL.match(url)
+    if ashby is not None:
+        return _ashby_posting(ashby.group(1), ashby.group(2).lower(), timeout, ashby_boards)
+    greenhouse = _GREENHOUSE_JOB_URL.match(url)
+    if greenhouse is not None:
+        return _one_posting(
+            "greenhouse", greenhouse.group(1), greenhouse.group(2), timeout, ats_client.get_greenhouse_job
+        )
+    lever = _LEVER_JOB_URL.match(url)
+    if lever is not None:
+        return _one_posting(
+            "lever", lever.group(1), lever.group(2), timeout, ats_client.get_lever_job
+        )
+    return None
+
+
+def _one_posting(ats: str, slug: str, job_id: str, timeout: float, fetch) -> tuple[str, str | None] | None:
+    try:
+        posting = fetch(slug, job_id, timeout=timeout)
+    except ats_client.AtsError as exc:
+        logger.info("%s job %s/%s unavailable (%s); falling back", ats.upper(), slug, job_id, exc.detail)
         return None
-    slug, job_id = match.group(1), match.group(2).lower()
+    return posting.get("jd_text") or "", posting.get("location")
+
+
+def _ashby_posting(slug: str, job_id: str, timeout: float, ashby_boards: dict) -> tuple[str, str | None] | None:
     if slug not in ashby_boards:
         try:
-            ashby_boards[slug] = ats_client.get_ashby_board(
-                slug, timeout=settings["request_timeout_seconds"]
-            )
+            ashby_boards[slug] = ats_client.get_ashby_board(slug, timeout=timeout)
         except ats_client.AtsError as exc:
             logger.info("ASHBY board %s unavailable (%s); falling back", slug, exc.detail)
             ashby_boards[slug] = None
@@ -383,7 +512,7 @@ def _ashby_jd(url: str, settings: dict, ashby_boards: dict) -> str | None:
     if posting is None:
         logger.info("ASHBY job %s not on board %s; falling back", job_id, slug)
         return None
-    return posting["jd_text"] or None
+    return posting.get("jd_text") or "", posting.get("location")
 
 
 def _jd_kind(job: dict, jd_source: str) -> str:
@@ -490,12 +619,16 @@ def _log_report(
     cost: float | None, model: str,
 ) -> None:
     logger.info(
-        "FUNNEL found %d = dupes (sheet) %d + dupes (in-run) %d + no URL %d + new %d"
+        "FUNNEL found %d = redirect %d + off-site %d + dupes (sheet) %d + dupes (in-run) %d"
+        " + no URL %d + new %d"
         " | new = title dropped %d + location dropped %d + eligible %d"
-        " | eligible = over cap %d + experience dropped %d + scored %d + failed %d",
-        funnel["found"], funnel["dupes_sheet"], funnel["dupes_run"], funnel["no_url"],
-        funnel["new"], funnel["title_dropped"], funnel["location_dropped"], funnel["eligible"],
-        funnel["over_cap"], funnel["experience_dropped"], funnel["scored"], funnel["failed"],
+        " | eligible = location dropped post-fetch %d + over cap %d + experience dropped %d"
+        " + scored %d + failed %d",
+        funnel["found"], funnel["redirect"], funnel["offsite"], funnel["dupes_sheet"],
+        funnel["dupes_run"],
+        funnel["no_url"], funnel["new"], funnel["title_dropped"], funnel["location_dropped"],
+        funnel["eligible"], funnel["location_post"], funnel["over_cap"],
+        funnel["experience_dropped"], funnel["scored"], funnel["failed"],
     )
     logger.info(
         "JD full fetched %d | snippet fallback %d | ATS full %d",
@@ -520,19 +653,23 @@ def _write_step_summary(
         return str(value).replace("|", "\\|")
 
     funnel_labels = [
-        ("found", "Found"), ("dupes_sheet", "Dupes (sheet)"), ("dupes_run", "Dupes (in-run)"),
-        ("no_url", "No URL"), ("new", "New"), ("title_dropped", "Title dropped"),
-        ("location_dropped", "Location dropped"), ("eligible", "Eligible"),
+        ("found", "Found"), ("redirect", "Redirect"), ("offsite", "Off-site"),
+        ("dupes_sheet", "Dupes (sheet)"),
+        ("dupes_run", "Dupes (in-run)"), ("no_url", "No URL"), ("new", "New"),
+        ("title_dropped", "Title dropped"), ("location_dropped", "Location dropped"),
+        ("eligible", "Eligible"), ("location_post", "Location dropped post-fetch"),
         ("over_cap", "Over cap"), ("experience_dropped", "Experience dropped"),
         ("scored", "Scored"), ("failed", "Failed"),
     ]
     lines = ["## Job Scanner run", "", "| Stage | Count |", "|---|---:|"]
     lines += [f"| {label} | {funnel[key]} |" for key, label in funnel_labels]
     lines += ["", "### Queries", "",
-              "| Query | Pages | Results | New | Passed | Page 2+ |", "|---|---:|---:|---:|---:|---:|"]
+              "| Query | Pages | Results | Redirect | Off-site | New | Passed | Page 2+ |",
+              "|---|---:|---:|---:|---:|---:|---:|---:|"]
     lines += [
-        f"| {cell(s['name'])} | {s['pages']} | {s['results']} | {s['new']} | {s['passed']} "
-        f"| {s['late']} |"
+        f"| {cell(s['name'])} | {s['pages']} | {s['results']} | {s['redirect']} | {s['offsite']} "
+        f"| {s['new']} "
+        f"| {s['passed']} | {s['late']} |"
         for s in query_stats
     ]
     lines += ["", "### Scores", "", "| " + " | ".join(histogram) + " |",

@@ -11,8 +11,8 @@ from job_scanner.ats_client import AtsError
 from job_scanner.scoring_client import ScoreResult, Usage
 
 TZ = "America/Chicago"
-QUERY_A = 'site:jobs.example.com ("Software Engineer")'
-QUERY_B = 'site:careers.example.org ("Software Engineer")'
+QUERY_A = '("Software Engineer") jobs.example.com'
+QUERY_B = '("Software Engineer") careers.example.org'
 USAGE_PER_CALL = Usage(input=1000, output=200, cache_read=4000, cache_write=500)
 COLUMNS = {name: index for index, name in enumerate(service.sheets_repo.JOBS_HEADERS)}
 
@@ -74,10 +74,12 @@ def _score_result(**overrides) -> ScoreResult:
 class Harness:
     def __init__(self, monkeypatch, *, settings=None, queries=None, company_sites=None,
                  companies=None, search_pages=None, ats_jobs=None, existing=(), jd=None,
-                 score=None, ashby_boards=None):
+                 score=None, ashby_boards=None, greenhouse_jobs=None, lever_jobs=None):
         self.search_pages = search_pages or {}
         self.ats_jobs = ats_jobs or {}
         self.ashby_boards = ashby_boards or {}
+        self.greenhouse_jobs = greenhouse_jobs or {}
+        self.lever_jobs = lever_jobs or {}
         self.ashby_calls = []
         self.existing = set(existing)
         self.jd = jd or {}
@@ -106,6 +108,8 @@ class Harness:
         for ats in ("greenhouse", "lever", "ashby"):
             monkeypatch.setattr(service.ats_client, f"list_{ats}_jobs", self._ats(ats))
         monkeypatch.setattr(service.ats_client, "get_ashby_board", self._ashby_board)
+        monkeypatch.setattr(service.ats_client, "get_greenhouse_job", self._greenhouse_job)
+        monkeypatch.setattr(service.ats_client, "get_lever_job", self._lever_job)
         monkeypatch.setattr(service.jd_client, "fetch_jd", self._fetch_jd)
         monkeypatch.setattr(service.scoring_client, "score_job", self._score)
         monkeypatch.setattr(service.sheets_repo, "get_columns", self._columns)
@@ -134,6 +138,18 @@ class Harness:
         if isinstance(board, Exception):
             raise board
         return board
+
+    def _one_job(self, store, key, ats):
+        job = store.get(key, AtsError(ats, key[0], "HTTP 404"))
+        if isinstance(job, Exception):
+            raise job
+        return job
+
+    def _greenhouse_job(self, slug, job_id, timeout=15):
+        return self._one_job(self.greenhouse_jobs, (slug, str(job_id)), "greenhouse")
+
+    def _lever_job(self, slug, posting_id, timeout=15):
+        return self._one_job(self.lever_jobs, (slug, str(posting_id)), "lever")
 
     def _fetch_jd(self, url, timeout, min_chars):
         self.jd_calls.append((url, timeout, min_chars))
@@ -502,6 +518,181 @@ def test_ashby_board_error_falls_back_and_is_not_refetched(monkeypatch):
     assert summary["scored"] == 2
 
 
+QUERY_BREEZY = 'site:breezy.hr ("Software Engineer")'
+
+
+def test_offsite_result_dropped_for_site_query(monkeypatch, caplog):
+    h = Harness(
+        monkeypatch,
+        companies=[],
+        queries=[dict(name="Breezy", query=QUERY_BREEZY, enabled=True)],
+        search_pages={QUERY_BREEZY: [[
+            _search_result("https://www.reddit.com/r/cscareerquestions/comments/1",
+                           title="Software Engineer at Breezy"),
+            _search_result("https://acme.breezy.hr/p/software-engineer"),
+        ]]},
+    )
+
+    with caplog.at_level("INFO", logger="job_scanner"):
+        summary = service.run_pipeline(None)
+
+    assert h.urls() == ["https://acme.breezy.hr/p/software-engineer"]
+    assert summary["found"] == 2
+    assert _messages(caplog, "DROP offsite") == [
+        "DROP offsite | Software Engineer at Breezy | "
+        "https://www.reddit.com/r/cscareerquestions/comments/1"
+    ]
+    assert any("off-site 1" in message for message in _messages(caplog, "QUERY"))
+    assert any("off-site 1" in message for message in _messages(caplog, "FUNNEL"))
+
+
+def test_opaque_goto_is_redirect_and_url_param_unwraps(monkeypatch, caplog):
+    from urllib.parse import quote
+    real = "https://job-boards.greenhouse.io/acme/jobs/4461450008"
+    query = 'site:job-boards.greenhouse.io ("Software Engineer")'
+    goto = "https://www.google.com/goto?url=CAESopaqueToken"
+    h = Harness(
+        monkeypatch,
+        companies=[],
+        queries=[dict(name="GH", query=query, enabled=True)],
+        search_pages={query: [[
+            _search_result(goto, title="Opaque Goto"),
+            _search_result("https://www.reddit.com/r/jobs/1"),
+            _search_result("https://www.google.com/url?q=" + quote(real, safe="")),
+            _search_result("https://www.google.com/url?q=CAESnotAUrl", title="Opaque Url"),
+        ]]},
+        greenhouse_jobs={("acme", "4461450008"): dict(jd_text="Greenhouse JD", location="Remote")},
+    )
+
+    with caplog.at_level("INFO", logger="job_scanner"):
+        service.run_pipeline(None)
+
+    assert h.urls() == [real]
+    assert h.score_calls[0]["jd_text"] == "Greenhouse JD"
+    assert _messages(caplog, "DROP offsite") == [
+        "DROP offsite | Software Engineer | https://www.reddit.com/r/jobs/1"
+    ]
+    assert _messages(caplog, "DROP redirect") == [
+        f"DROP redirect | Opaque Goto | {goto}",
+        "DROP redirect | Opaque Url | https://www.google.com/url?q=CAESnotAUrl",
+    ]
+    assert any("redirect 2" in message for message in _messages(caplog, "QUERY"))
+    assert "off-site 1" in _messages(caplog, "FUNNEL")[0]
+    assert "redirect 2" in _messages(caplog, "FUNNEL")[0]
+    assert "QUERY total unwrapped google redirects 1" in _messages(caplog, "QUERY")
+
+
+def test_unresolved_redirect_warning_above_30_percent(monkeypatch, caplog):
+    query = 'site:breezy.hr ("Software Engineer")'
+    Harness(
+        monkeypatch,
+        companies=[],
+        queries=[dict(name="Breezy", query=query, enabled=True)],
+        search_pages={query: [[
+            _search_result("https://www.google.com/goto?url=token1"),
+            _search_result("https://google.com/goto?url=token2"),
+            _search_result("https://acme.breezy.hr/p/software-engineer"),
+        ]]},
+    )
+
+    with caplog.at_level("WARNING", logger="job_scanner"):
+        service.run_pipeline(None)
+
+    assert _messages(caplog, "SEARCH") == [
+        "SEARCH 2 of 3 results are unresolved Google /goto redirects "
+        "(Serper-side issue); those jobs are skipped this run."
+    ]
+
+
+def test_unresolved_redirect_warning_not_at_30_percent(monkeypatch, caplog):
+    query = 'site:breezy.hr ("Software Engineer")'
+    results = [_search_result(f"https://www.google.com/goto?url=token{i}") for i in range(3)]
+    results += [_search_result(f"https://acme.breezy.hr/p/{i}") for i in range(7)]
+    Harness(
+        monkeypatch,
+        companies=[],
+        queries=[dict(name="Breezy", query=query, enabled=True)],
+        search_pages={query: [results]},
+    )
+
+    with caplog.at_level("WARNING", logger="job_scanner"):
+        service.run_pipeline(None)
+
+    assert _messages(caplog, "SEARCH") == []
+
+
+def test_host_match_is_exact_or_subdomain():
+    assert service._host_matches("https://notgreenhouse.io/jobs/1", "greenhouse.io") is False
+    assert service._host_matches("https://www.wellfound.com/jobs/1", "wellfound.com") is True
+
+
+def _ats_search(monkeypatch, url, posting, **kwargs):
+    settings = _settings(
+        location_filter=dict(
+            exclude=["London", "India", "Bangalore"],
+            us_signals=["San Francisco"],
+        )
+    )
+    return Harness(
+        monkeypatch,
+        companies=[],
+        settings=settings,
+        search_pages={QUERY_A: [[_search_result(url)]]},
+        **posting,
+        **kwargs,
+    )
+
+
+GH_URL = "https://job-boards.greenhouse.io/acme/jobs/4461450008"
+LEVER_URL = "https://jobs.lever.co/acme/6ed76ce8-4156-4b60-b120-403538bd66cd"
+
+
+def test_structured_india_location_dropped_after_fetch(monkeypatch, caplog):
+    h = _ats_search(
+        monkeypatch, GH_URL,
+        dict(greenhouse_jobs={("acme", "4461450008"): dict(
+            jd_text="Full greenhouse JD", location="Bengaluru, India")}),
+    )
+
+    with caplog.at_level("INFO", logger="job_scanner"):
+        summary = service.run_pipeline(None)
+
+    assert h.score_calls == []
+    assert h.appends == []
+    assert summary["scored"] == 0
+    assert _messages(caplog, "DROP location") == [
+        f"DROP location India (ats-location) | Software Engineer | {GH_URL}"
+    ]
+    assert "location dropped post-fetch 1" in _messages(caplog, "FUNNEL")[0]
+    assert _messages(caplog, "JD") == ["JD full fetched 1 | snippet fallback 0 | ATS full 0"]
+
+
+def test_structured_location_with_us_signal_kept(monkeypatch):
+    h = _ats_search(
+        monkeypatch, LEVER_URL,
+        dict(lever_jobs={("acme", "6ed76ce8-4156-4b60-b120-403538bd66cd"): dict(
+            jd_text="Full lever JD", location="San Francisco; London")}),
+    )
+
+    service.run_pipeline(None)
+
+    assert h.jd_calls == []
+    assert h.score_calls[0]["jd_text"] == "Full lever JD"
+    assert h.rows[0]["url"] == LEVER_URL
+
+
+def test_ats_job_api_failure_falls_back_to_jd_client(monkeypatch):
+    h = _ats_search(
+        monkeypatch, GH_URL,
+        dict(greenhouse_jobs={("acme", "4461450008"): AtsError("greenhouse", "acme", "HTTP 500")}),
+    )
+
+    service.run_pipeline(None)
+
+    assert [url for url, _, _ in h.jd_calls] == [GH_URL]
+    assert h.score_calls[0]["jd_text"] == "Fetched full JD for " + GH_URL
+
+
 def test_non_ashby_search_url_skips_ashby_api(monkeypatch):
     h = Harness(
         monkeypatch,
@@ -800,9 +991,10 @@ def test_funnel_numbers_add_up(monkeypatch, caplog):
         summary = service.run_pipeline(5)
 
     assert _messages(caplog, "FUNNEL") == [
-        "FUNNEL found 11 = dupes (sheet) 1 + dupes (in-run) 1 + no URL 1 + new 8"
+        "FUNNEL found 11 = redirect 0 + off-site 0 + dupes (sheet) 1 + dupes (in-run) 1 + no URL 1 + new 8"
         " | new = title dropped 1 + location dropped 1 + eligible 6"
-        " | eligible = over cap 1 + experience dropped 1 + scored 3 + failed 1"
+        " | eligible = location dropped post-fetch 0 + over cap 1 + experience dropped 1"
+        " + scored 3 + failed 1"
     ]
     assert summary == dict(found=11, new=8, filtered=3, scored=3, failed=1, skipped_cap=1)
 
@@ -928,10 +1120,11 @@ def test_query_lines_and_serper_call_total(monkeypatch, caplog):
         service.run_pipeline(5)
 
     assert _messages(caplog, "QUERY") == [
-        "QUERY A | pages 2 | results 11 | new 8 | passed 6 | new+passed from page 2+ 3",
-        "QUERY B | pages 1 | results 0 | new 0 | passed 0 | new+passed from page 2+ 0",
-        "QUERY C | pages 0 | results 0 | new 0 | passed 0 | new+passed from page 2+ 0",
+        "QUERY A | pages 2 | results 11 | redirect 0 | off-site 0 | new 8 | passed 6 | new+passed from page 2+ 3",
+        "QUERY B | pages 1 | results 0 | redirect 0 | off-site 0 | new 0 | passed 0 | new+passed from page 2+ 0",
+        "QUERY C | pages 0 | results 0 | redirect 0 | off-site 0 | new 0 | passed 0 | new+passed from page 2+ 0",
         "QUERY total Serper calls 4",
+        "QUERY total unwrapped google redirects 0",
     ]
     assert _messages(caplog, "FAIL search") == ["FAIL search C page 1 | ConnectTimeout"]
 
@@ -1076,7 +1269,10 @@ def test_step_summary_written_when_env_set(monkeypatch, tmp_path):
     assert "## Job Scanner run" in text
     assert "| Found | 11 |" in text
     assert "| Experience dropped | 1 |" in text
-    assert "| A | 2 | 11 | 8 | 6 | 3 |" in text
+    assert "| A | 2 | 11 | 0 | 0 | 8 | 6 | 3 |" in text
+    assert "| Redirect | 0 |" in text
+    assert "| Off-site | 0 |" in text
+    assert "| Location dropped post-fetch | 0 |" in text
     assert "| 8-10 | 6-7.9 | 3-5.9 | 1-2.9 |" in text
     assert "| 1 | 1 | 0 | 1 |" in text
     assert "est $0.0132 (test-model)" in text

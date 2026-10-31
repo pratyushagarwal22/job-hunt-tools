@@ -81,7 +81,7 @@ def list_ashby_jobs(
 
 
 def get_ashby_board(slug: str, timeout: float = 15) -> list[dict]:
-    """Every posting on one Ashby board (no lookback filter), as dicts of id, title, url, jd_text."""
+    """Every posting on one Ashby board (no lookback filter), as dicts of id, title, url, jd_text, location."""
     body = _get_json(_ASHBY_URL.format(slug=slug), "ashby", slug, timeout)
     return [
         dict(
@@ -89,9 +89,30 @@ def get_ashby_board(slug: str, timeout: float = 15) -> list[dict]:
             title=item.get("title"),
             url=item.get("jobUrl"),
             jd_text=_ashby_jd_text(item),
+            location=item.get("location"),
         )
         for item in body.get("jobs", [])
     ]
+
+
+def get_greenhouse_job(slug: str, job_id, timeout: float = 15) -> dict:
+    """One Greenhouse posting: jd_text and location. Errors raise AtsError."""
+    url = f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs/{job_id}"
+    item = _get_json(url, "greenhouse", slug, timeout)
+    return dict(
+        jd_text=_html_to_text(html.unescape(item.get("content") or "")),
+        location=(item.get("location") or {}).get("name"),
+    )
+
+
+def get_lever_job(slug: str, posting_id, timeout: float = 15) -> dict:
+    """One Lever posting: jd_text and location. Errors raise AtsError."""
+    url = f"https://api.lever.co/v0/postings/{slug}/{posting_id}"
+    item = _get_json(url, "lever", slug, timeout)
+    return dict(
+        jd_text=_lever_jd_text(item),
+        location=(item.get("categories") or {}).get("location"),
+    )
 
 
 def _ashby_jd_text(item: dict) -> str:

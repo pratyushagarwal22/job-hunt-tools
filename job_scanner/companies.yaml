@@ -10,9 +10,10 @@ companies:
     ats: greenhouse
     slug: mixpanel
 
-  - name: UpKeep
-    ats: greenhouse
-    slug: upkeep
+  # 0 jobs in every run Oct 2026; search covers them
+  # - name: UpKeep
+  #   ats: greenhouse
+  #   slug: upkeep
 
   - name: Checkr
     ats: greenhouse
@@ -75,13 +76,15 @@ companies:
     ats: greenhouse
     slug: altanaai
 
-  - name: Walnut.io
-    ats: greenhouse
-    slug: walnut
+  # 0 jobs in every run Oct 2026; search covers them
+  # - name: Walnut.io
+  #   ats: greenhouse
+  #   slug: walnut
 
-  - name: Viam
-    ats: greenhouse
-    slug: viamrobotics
+  # 0 jobs in every run Oct 2026; search covers them
+  # - name: Viam
+  #   ats: greenhouse
+  #   slug: viamrobotics
 
   - name: Pinwheel
     ats: greenhouse
@@ -203,9 +206,10 @@ companies:
     ats: ashby
     slug: perplexity
 
-  - name: Character.AI
-    ats: ashby
-    slug: character
+  # 0 jobs in every run Oct 2026; search covers them
+  # - name: Character.AI
+  #   ats: ashby
+  #   slug: character
 
   - name: Vistar Media
     ats: ashby
