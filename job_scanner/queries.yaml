@@ -24,13 +24,15 @@ queries:
     query: 'site:apply.workable.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad") -intitle:Staff -intitle:Principal -intitle:Director -intitle:Senior -intitle:Sr'
     enabled: true
 
+  # 0–5 results in 61 runs, Oct 2026
   - name: Sequoia Capital
     query: 'site:jobs.sequoiacap.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad") -intitle:Staff -intitle:Principal -intitle:Director -intitle:Senior -intitle:Sr'
-    enabled: true
+    enabled: false
 
+  # 0–5 results in 61 runs, Oct 2026
   - name: Insight Partners
     query: 'site:jobs.insightpartners.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad") -intitle:Staff -intitle:Principal -intitle:Director -intitle:Senior -intitle:Sr'
-    enabled: true
+    enabled: false
 
   - name: a16z
     query: 'site:jobs.a16z.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad") -intitle:Staff -intitle:Principal -intitle:Director -intitle:Senior -intitle:Sr'
@@ -70,9 +72,10 @@ company_sites:
     query: 'site:amazon.jobs/en/jobs ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad") -intitle:Staff -intitle:Principal -intitle:Director -intitle:Senior -intitle:Sr'
     enabled: true
 
+  # 0–5 results in 61 runs, Oct 2026
   - name: Microsoft
     query: 'site:jobs.careers.microsoft.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad") -intitle:Staff -intitle:Principal -intitle:Director -intitle:Senior -intitle:Sr'
-    enabled: true
+    enabled: false
 
   - name: Google
     query: 'site:google.com/about/careers/applications/jobs/results ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad") -intitle:Staff -intitle:Principal -intitle:Director -intitle:Senior -intitle:Sr'

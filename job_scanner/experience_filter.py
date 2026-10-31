@@ -16,7 +16,7 @@ _YEARS_RE = re.compile(
     rf"(?P<range>\s*(?:-|–|—|to)\s*{_NUM}{_ECHO}\s*\+?)?"
     r"\s*(?:years?|yrs?)\b"
     # Years that describe something other than the candidate.
-    r"(?!\s+(?:ago|old)\b)"
+    r"(?!\s+(?:ago|old|of\s+age)\b)"
     r"(?!\s+(?:in|of)\s+(?:business|operation|operations|existence)\b)"
     # Rest of the sentence, as a lookahead so it doesn't swallow later matches.
     r"(?=(?P<tail>[^.!?;\n]{0,100}))",
@@ -29,7 +29,10 @@ _DEGREE_BEFORE = re.compile(
     re.IGNORECASE,
 )
 _EXPERIENCE_BEFORE = re.compile(r"\bexperience[^.!?;\n]{0,15}$", re.IGNORECASE)
+_AGED_BEFORE = re.compile(r"\baged\s+$", re.IGNORECASE)
 _TAG = re.compile(r"<[^>]+>")
+# No early-career posting asks for 15+ years; those numbers are company history.
+_MAX_EARLY_CAREER_YEARS = 15
 
 
 def required_years(text: str) -> tuple[int | None, str | None]:
@@ -40,6 +43,8 @@ def required_years(text: str) -> tuple[int | None, str | None]:
         if not _is_experience(match, clean):
             continue
         years = _to_int(match.group("n"))
+        if years >= _MAX_EARLY_CAREER_YEARS:
+            continue
         if best is None or years < best[0]:
             best = (years, _phrase(match))
     return best if best else (None, None)
@@ -55,6 +60,8 @@ def _clean(text: str) -> str:
 def _is_experience(match: re.Match, text: str) -> bool:
     tail = match.group("tail")
     before = text[max(0, match.start() - 40): match.start()]
+    if _AGED_BEFORE.search(before):
+        return False
     return bool(
         match.group("plus")
         or match.group("range")

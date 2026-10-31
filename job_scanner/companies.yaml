@@ -6,10 +6,6 @@ companies:
 
   # --- Greenhouse ---
 
-  - name: Hightouch
-    ats: greenhouse
-    slug: hightouch
-
   - name: Mixpanel
     ats: greenhouse
     slug: mixpanel
@@ -131,6 +127,26 @@ companies:
     ats: greenhouse
     slug: reddit
 
+  - name: DoorDash
+    ats: greenhouse
+    slug: doordashusa
+
+  - name: ID.me
+    ats: greenhouse
+    slug: idme
+
+  - name: Browserbase
+    ats: greenhouse
+    slug: browserbaseinc
+
+  - name: Mercury
+    ats: greenhouse
+    slug: mercury
+
+  - name: Cayuse
+    ats: greenhouse
+    slug: cayuse
+
   # --- Lever ---
 
   - name: Palantir
@@ -152,6 +168,18 @@ companies:
   - name: Spotify
     ats: lever
     slug: spotify
+
+  - name: Hive
+    ats: lever
+    slug: hive
+
+  - name: Provectus
+    ats: lever
+    slug: provectus
+
+  - name: CrossCountry Consulting
+    ats: lever
+    slug: crosscountry-consulting
 
   # --- Ashby ---
 
@@ -207,9 +235,10 @@ companies:
     ats: ashby
     slug: Vic.ai  # NOTE: dots and capitals in URL — verify
 
-  - name: Arch
-    ats: ashby
-    slug: arch.co  # NOTE: dot in slug — verify
+  # Ashby 404; re-check slug.
+  # - name: Arch
+  #   ats: ashby
+  #   slug: arch.co  # NOTE: dot in slug — verify
 
   - name: Sandbar
     ats: ashby
@@ -262,3 +291,52 @@ companies:
   - name: Materialize
     ats: ashby
     slug: materialize
+
+  # moved from Greenhouse, Oct 2026
+  - name: Hightouch
+    ats: ashby
+    slug: hightouch-inc
+
+  - name: OpenAI
+    ats: ashby
+    slug: openai
+
+  - name: Fluidstack
+    ats: ashby
+    slug: fluidstack
+
+  - name: Baseten
+    ats: ashby
+    slug: baseten
+
+  - name: Aurora
+    ats: ashby
+    slug: aurora-operations-inc
+
+  - name: Sierra
+    ats: ashby
+    slug: Sierra  # NOTE: capital S in URL — verify case sensitivity
+
+  - name: Base Power
+    ats: ashby
+    slug: base-power
+
+  - name: Harvey
+    ats: ashby
+    slug: harvey
+
+  - name: Pinecone
+    ats: ashby
+    slug: pinecone
+
+  - name: Lumos
+    ats: ashby
+    slug: lumos
+
+  - name: Chai Discovery
+    ats: ashby
+    slug: chaidiscovery
+
+  - name: Wayve
+    ats: ashby
+    slug: wayve

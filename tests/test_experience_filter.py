@@ -22,6 +22,7 @@ from job_scanner.experience_filter import required_years
     ("Experience: 3 years", 3),
     ("0-2 years of experience", 0),
     ("ten years of experience", 10),
+    ("5+ years of experience", 5),
 ])
 def test_required_years(text, expected):
     years, phrase = required_years(text)
@@ -36,6 +37,10 @@ def test_required_years(text, expected):
     "We are a 5 year old startup.",
     "401k match vests over 4 years.",
     "Build backend services in Python. Great team.",
+    "18 years of age or older",
+    "Must be aged 18 years or older",
+    "30 years of investing experience",
+    "20+ years of experience",
     "",
     None,
 ])
