@@ -2,7 +2,7 @@
 
 ## What this does
 
-Two small Python tools that feed one Google Sheet. **`job_scanner`** (live) runs twice a day on GitHub Actions: it polls tracked company boards on Greenhouse, Lever and Ashby, runs `site:` searches through the Serper API, dedups against the sheet, drops jobs by title, location and required years of experience, scores the rest with Claude against your profile, and appends the scored rows to the sheet's `Jobs` tab. **`email_finder`** (live) is a manual CLI you run locally: it takes LinkedIn profile URLs (arguments or `email_finder/linkedin-profiles.txt`), looks up each email through Prospeo and then Apify for Prospeo's misses (Apollo is supported but disabled; its API needs a paid plan), and appends one row per URL to the `Contacts` tab. With `--draft` it also writes a short LinkedIn connection note into each found row's `outreach_line`; outreach emails are written by hand.
+Two small Python tools that feed one Google Sheet. **`job_scanner`** (live) runs twice a day on GitHub Actions: it polls tracked company boards on Greenhouse, Lever and Ashby, runs `site:` searches through the Serper API, dedups against the sheet, drops jobs by title, location and required years of experience, scores the rest with Claude Sonnet (`claude-sonnet-5-5`) against your profile, and appends the scored rows to the sheet's `Jobs` tab. Unresolved Google redirects (`google.com/goto`, or a `/url` link whose target does not start with `http`) are counted as redirects and skipped. After a Greenhouse, Lever, or Ashby single-job fetch, the structured location is checked and a non-US job is dropped before scoring. **`email_finder`** (built, local CLI) takes LinkedIn profile URLs (arguments, `--file`, or `email_finder/linkedin-profiles.txt`), looks up each email through Prospeo and then Apify for Prospeo's misses (Apollo is supported but disabled; its API needs a paid plan), and appends one row per URL to the `Contacts` tab. With `--draft` it also writes a short LinkedIn connection note into each found row's `outreach_line`; outreach emails are written by hand.
 
 All commands below are run from the repo root with the virtual environment active.
 
@@ -14,10 +14,13 @@ All commands below are run from the repo root with the virtual environment activ
 | Small local run (TEST sheet) | `python -m job_scanner.main --max-jobs 2` | [Local run and tests](#local-run-and-tests) |
 | Run tests | `pytest` | [Local run and tests](#local-run-and-tests) |
 | Local run with a saved log | `python -m job_scanner.main --max-jobs 5 2>&1 \| tee run.log` | [Local run and tests](#local-run-and-tests) |
+| Email lookup, one URL (TEST sheet) | `python -m email_finder.main <url>` | [Email finder](#email-finder) |
+| Email lookup, several URLs (TEST sheet) | `python -m email_finder.main <url> <url>` | [Email finder](#email-finder) |
 | Email lookup from `email_finder/linkedin-profiles.txt` (TEST sheet) | `python -m email_finder.main` | [Email finder](#email-finder) |
-| Email lookup for given URLs (TEST sheet) | `python -m email_finder.main <url> [<url> ...]` | [Email finder](#email-finder) |
+| Email lookup from another file | `python -m email_finder.main --file <path>` | [Email finder](#email-finder) |
 | Email lookup + connection-note drafts | `python -m email_finder.main --draft` | [Email finder](#email-finder) |
-| Real (prod) email lookup | `SHEET_ID=<prod id> python -m email_finder.main [--draft]` | [Email finder](#email-finder) |
+| Real (prod) email lookup | `SHEET_ID=<prod id> python -m email_finder.main` | [Email finder](#email-finder) |
+| Real (prod) email lookup + drafts | `SHEET_ID=<prod id> python -m email_finder.main --draft` | [Email finder](#email-finder) |
 | Set a file secret | `base64 -i <file> \| gh secret set <NAME>` | [GitHub Actions](#github-actions) |
 | Set a plain secret | `gh secret set <NAME>` | [GitHub Actions](#github-actions) |
 | Manual CI run | `gh workflow run scan.yaml -f max_jobs=2` | [GitHub Actions](#github-actions) |
@@ -63,7 +66,15 @@ cp .env.example .env
 
 Fill in `SERPER_API_KEY`, `ANTHROPIC_API_KEY` and `SHEET_ID`. **`SHEET_ID` in `.env` is always the TEST sheet ID.** The production sheet ID lives only in GitHub secrets, so a local run writes to TEST unless you pass the production ID yourself. There is no `--test` flag; the environment decides which sheet is used. `email_finder` runs only locally, so it writes to TEST by default; for real use, prefix the command with the production ID: `SHEET_ID=<prod id> python -m email_finder.main ...` (never put the production ID in `.env`). Every run prints `Writing to sheet: <title>` first so you can see which sheet it hit.
 
-`GOOGLE_APPLICATION_CREDENTIALS=service_account.json` is already set in the example. `PROSPEO_API_KEY` and `APIFY_TOKEN` are for `email_finder` (see [Email finder](#email-finder) for when each is required). `APOLLO_API_KEY` is optional (paid Apollo plan only).
+| Variable | Where it is set | When it is required |
+|---|---|---|
+| `SHEET_ID` | `.env` holds the TEST sheet ID. The production ID is a GitHub secret, or a one-off command prefix | Every run |
+| `GOOGLE_APPLICATION_CREDENTIALS` | `.env` (already `service_account.json` in the example) | Every run |
+| `SERPER_API_KEY` | `.env` and the GitHub secret of the same name | `job_scanner` |
+| `ANTHROPIC_API_KEY` | `.env` and the GitHub secret of the same name | `job_scanner`; `email_finder` only with `--draft` |
+| `PROSPEO_API_KEY` | `.env` only | `email_finder` when `prospeo` is in `providers` (it is, by default) |
+| `APIFY_TOKEN` | `.env` only | `email_finder` when `apify` is in `providers` (it is, by default) |
+| `APOLLO_API_KEY` | `.env` only | `email_finder` only when `apollo` is in `providers` (it is not; paid plan) |
 
 ### 3. Personal config files
 
@@ -172,14 +183,23 @@ Required keys in `.env`, checked before any work (all missing ones are named in 
 
 ### Input file format
 
-`email_finder/linkedin-profiles.txt`, one LinkedIn profile URL per line:
+`email_finder/linkedin-profiles.txt` is copied from `email_finder/linkedin-profiles.example.txt`. One LinkedIn profile URL per line:
+
+```text
+# Copy to email_finder/linkedin-profiles.txt (gitignored) and add real profile URLs.
+# One LinkedIn profile URL per line. Blank lines and lines starting with # are ignored.
+# An optional trailing "# note" goes into the notes column.
+
+# https://www.linkedin.com/in/jane-doe-example/
+# https://www.linkedin.com/in/john-roe-example  # recruiter at Example Corp
+```
 
 - Blank lines and lines starting with `#` are skipped.
-- A trailing `# note` (the `#` must follow a space) goes into the row's `notes` column and is the context for the `--draft` note (a role mentioned there gets referenced; no note → a networking note).
-- URLs are normalized: `https://`, `www.` / `uk.` / `m.` → `linkedin.com`, lowercase, no query, fragment or trailing slash. Deeper `/in/` paths are trimmed, so `https://www.linkedin.com/in/Jane-Doe/details/experience/` becomes `https://linkedin.com/in/jane-doe`.
+- A trailing `# note` (whitespace before the `#`) goes into the row's `notes` column and is the context for the `--draft` note (a role mentioned there gets referenced; no note → a networking note).
+- URLs are normalized: scheme becomes `https://` if missing, any `linkedin.com` subdomain (`www.`, `uk.`, `m.`, …) becomes `linkedin.com`, lowercase, no query, fragment or trailing slash. Deeper `/in/` paths are trimmed, so `https://www.linkedin.com/in/Jane-Doe/details/experience/` becomes `https://linkedin.com/in/jane-doe`.
 - Anything that isn't a `linkedin.com/in/<slug>` profile URL (`/pub/` links, company pages, other sites, text) is printed as `ignored` and never looked up.
 
-URLs passed on the command line follow the same rules. With URLs and no `--file`, the default file is not read.
+URLs passed on the command line follow the same rules. With URLs and no `--file`, the default file is not read. Passing URLs and `--file` together reads both, URLs first. `--draft` can be added to any of the commands below. `main.py` accepts only those two flags.
 
 ### Commands
 
@@ -189,7 +209,13 @@ Look up every URL in `email_finder/linkedin-profiles.txt` (TEST sheet):
 python -m email_finder.main
 ```
 
-Look up specific URLs instead:
+Look up one URL:
+
+```bash
+python -m email_finder.main https://www.linkedin.com/in/jane-doe-example/
+```
+
+Look up several URLs:
 
 ```bash
 python -m email_finder.main https://www.linkedin.com/in/jane-doe-example/ https://www.linkedin.com/in/john-roe-example
@@ -328,6 +354,8 @@ Paste the **production** sheet ID here, not the TEST one:
 gh secret set SHEET_ID
 ```
 
+`email_finder` does not run in CI. `PROSPEO_API_KEY`, `APIFY_TOKEN`, and optional `APOLLO_API_KEY` stay in `.env` and are not Actions secrets.
+
 Confirm all six are set (values are never shown):
 
 ```bash
@@ -389,9 +417,11 @@ Key lines start with a fixed uppercase prefix (after the timestamp and logger na
 |---|---|
 | `RUN` | Start: run time, effective cap, `ats_lookback_days`, scoring model, existing URL count. End: elapsed time |
 | `ATS` | Companies polled and jobs within the lookback; companies with 0 jobs; companies with errors (slug + HTTP status or error type) |
-| `QUERY` | Per search query: pages fetched, results, new after dedup, passed filters, new+passed from page 2+. Then total Serper calls for the run |
-| `FUNNEL` | found = dupes (sheet) + dupes (in-run) + no URL + new; new = title dropped + location dropped + eligible; eligible = over cap + experience dropped + scored + failed |
-| `DROP` | One line per filtered job: `DROP title <keyword or "no include match">`, `DROP location <keyword> (<location/title/url>)`, `DROP experience <years> \| <phrase>`, `DROP cap`. Fields are separated by ` \| ` |
+| `QUERY` | Per search query: pages fetched, results, redirect, off-site, new after dedup, passed filters, new+passed from page 2+. Then total Serper calls and unwrapped Google redirects |
+| `FUNNEL` | found = redirect + off-site + dupes (sheet) + dupes (in-run) + no URL + new; new = title dropped + location dropped + eligible; eligible = location dropped post-fetch + over cap + experience dropped + scored + failed |
+| `DROP` | One line per filtered job: `DROP title <keyword or "no include match">`, `DROP location <keyword> (<location/title/url>)`, `DROP location <keyword> (ats-location)`, `DROP redirect`, `DROP offsite`, `DROP experience <years> \| <phrase>`, `DROP cap`. Fields are separated by ` \| ` |
+| `SEARCH` | Warning when unresolved Google `/goto` (and opaque `/url`) redirects are more than 30% of search results. Those results are skipped |
+| `GREENHOUSE` / `LEVER` | A search-found Greenhouse or Lever job whose single-job API call failed; the run falls back to a plain page fetch |
 | `JD` | JD source counts: full fetched, snippet fallback, ATS full |
 | `FAIL` | `FAIL search` (query, page, HTTP status) or `FAIL job` (URL, error type, message truncated to 150 chars) |
 | `SCORES` | Score histogram: 8-10, 6-7.9, 3-5.9, 1-2.9 |
@@ -413,7 +443,7 @@ gh run view <id> --log
 Export the key lines from the last 60 runs into one file for review:
 
 ```bash
-gh run list --workflow scan.yaml --limit 60 --json databaseId -q '.[].databaseId' | xargs -I{} gh run view {} --log | grep -E "RUN|ATS|QUERY|FUNNEL|DROP|JD|FAIL|SCORES|COST|ASHBY" > review.txt
+gh run list --workflow scan.yaml --limit 60 --json databaseId -q '.[].databaseId' | xargs -I{} gh run view {} --log | grep -E "RUN|ATS|QUERY|FUNNEL|DROP|JD|FAIL|SCORES|COST|ASHBY|SEARCH|GREENHOUSE|LEVER" > review.txt
 ```
 
 Like `run.log`, `review.txt` is gitignored; delete it when done to keep the folder tidy.
@@ -448,9 +478,9 @@ grep "DROP title no include match" run.log | cut -d'|' -f2
 - `ats_lookback_days`: how far back ATS jobs count as new (2).
 - `request_timeout_seconds`, `jd_min_chars` (a fetched page with less visible text falls back to title + snippet), `timezone` (all dates are written in this zone).
 - `title_filter`: a title must match at least one `include` keyword and no `exclude` keyword (case-insensitive, whole-word, so "Lead" does not match "Leadership"). `always_allow` phrases count as an include match and are removed before the exclude check: "Member of Technical Staff" passes, "Senior Member of Technical Staff" drops.
-- `location_filter`: drops a job only if an `exclude` keyword matches and no `us_signals` entry appears in any checked field. ATS jobs check the location field; search jobs check the title and raw URL, never the snippet. "New York or Zurich" passes; blank, "Remote" and US locations pass.
-- `experience_filter.max_years_required`: drop a job whose JD requires more years than this (2). No stated requirement means keep.
-- `scoring`: `model`, `force_tool_choice`, `max_tokens`, `max_jd_chars` (JD truncation).
+- `location_filter`: drops a job only if an `exclude` keyword matches and no `us_signals` entry appears in any checked field. ATS jobs check the location field; search jobs check the title and raw URL, never the snippet. "New York or Zurich" passes; blank, "Remote" and US locations pass. Search hits on Greenhouse, Lever, or Ashby are checked again after the single-job API returns a structured location (`DROP location <keyword> (ats-location)`). Those drops are not scored.
+- `experience_filter.max_years_required`: drop a job whose JD requires more years than this (2). No stated requirement means keep. "years of age", "aged N", and any number >= 15 are ignored.
+- `scoring`: current `model` is `claude-sonnet-5-5` with `force_tool_choice: false`. Also `max_tokens` and `max_jd_chars` (JD truncation).
 - `prices`: USD per million tokens per model ID, used for the `COST` line. A model with no entry logs "cost unknown" and never fails the run.
 
 **Switching the scoring model** is a one-line change to `scoring.model`, as long as the new model has a `prices` entry. Haiku also needs `force_tool_choice: true` (forced tool call). Sonnet and Opus 5.5 reject a forced tool choice, so keep `force_tool_choice: false` for them.
@@ -503,12 +533,12 @@ The default `email_finder` input: one LinkedIn profile URL per line with an opti
 
 ### Scoring (Anthropic)
 
-The `COST` line in each run's log reports actual tokens and estimated cost. The token counts below were measured on a 25-job Opus run: about **6,875 cache-read, 1,550 input and 470 output tokens per job**. The Opus row is measured. The Sonnet and Haiku rows are estimates that apply the same token counts to their `prices` entries. Each run also pays one cache write of the system prompt (about 6,875 tokens), shown separately as an estimate.
+The `COST` line in each run's log reports actual tokens and estimated cost. Scoring uses `claude-sonnet-5-5`. The token counts below were measured on a 25-job Opus run: about **6,875 cache-read, 1,550 input and 470 output tokens per job**. The Opus row is that measurement. The Sonnet row (current model) and the Haiku row apply the same token counts to their `prices` entries. Each run also pays one cache write of the system prompt (about 6,875 tokens), shown separately as an estimate.
 
 | Model | Input / output / cache write / cache read (USD per 1M tokens) | Per job | Cache write per run (est.) | Full run, 150 jobs |
 |---|---|---|---|---|
-| `claude-opus-5-5` (current) | 4.00 / 20.00 / 5.00 / 0.20 | **$0.017 (measured)** | $0.034 | ~$2.58 |
-| `claude-sonnet-5-5` | 2.00 / 10.00 / 2.50 / 0.20 | ~$0.009 (estimate) | $0.017 | ~$1.39 (estimate) |
+| `claude-sonnet-5-5` (current) | 2.00 / 10.00 / 2.50 / 0.20 | ~$0.009 (estimate) | $0.017 | ~$1.39 (estimate) |
+| `claude-opus-5-5` | 4.00 / 20.00 / 5.00 / 0.20 | **$0.017 (measured)** | $0.034 | ~$2.58 |
 | `claude-haiku-4-5-20251001` | 1.00 / 5.00 / 1.25 / 0.10 | ~$0.005 (estimate) | $0.009 | ~$0.70 (estimate) |
 
 Newer models' tokenizers count more tokens for the same text than older ones, so the Haiku 4.5 estimate (built from Opus 5.5 counts) is likely on the high side. Snippet-scored jobs are cheaper (less input); long JDs are capped at `max_jd_chars`. Two runs a day roughly doubles the daily figure.
@@ -517,7 +547,7 @@ Newer models' tokenizers count more tokens for the same text than older ones, so
 
 ### Search (Serper)
 
-Each query page is **1 Serper credit at `num=10`**. The ceiling is enabled queries × `max_pages_per_query` × 2 runs a day: 23 × 4 × 2 = 184 credits/day with the current config. Pagination stops early on empty pages, so typical spend is lower. The `QUERY total Serper calls` line reports the real count per run.
+Each query page is **1 Serper credit at `num=10`**. The ceiling is enabled queries × `max_pages_per_query` × 2 runs a day: 20 × 4 × 2 = 160 credits/day with the current config (Sequoia Capital, Insight Partners, and Microsoft are disabled). Pagination stops early on empty pages, so typical spend is lower. The `QUERY total Serper calls` line reports the real count per run.
 
 ATS polling (Greenhouse, Lever, Ashby) uses free public APIs.
 

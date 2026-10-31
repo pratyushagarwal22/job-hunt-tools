@@ -2,12 +2,12 @@
 
 ## Goal
 
-Find fresh US-based software engineering jobs, score them against my profile, and save the best to a Google Sheet. Separately, find contact emails for outreach.
+Find fresh US-based software engineering jobs, score them against a profile, and save the best to a Google Sheet. Separately, find contact emails for outreach.
 
 ## In Scope
 
 - `job_scanner/` — automated pipeline (GitHub Actions cron, twice daily on UTC crons `'7 10 * * *'` (5:07 AM CDT / 4:07 AM CST) and `'7 20 * * *'` (3:07 PM CDT / 2:07 PM CST). GitHub scheduled runs are best-effort and often start hours late, so runs are set early; manual runs start immediately.)
-- `email_finder/` — manual CLI tool
+- `email_finder/` — manual CLI, built (Prospeo, then Apify; Apollo implemented and disabled)
 - One Google Sheet, two tabs ("Jobs" and "Contacts")
 - Two job sources: search API queries and direct ATS company board polling
 
@@ -18,7 +18,7 @@ Find fresh US-based software engineering jobs, score them against my profile, an
 - No LangChain / agent framework
 - No Google Custom Search API
 - No phone numbers from any email provider (email only)
-- No non-US jobs (F-1 OPT; US-only search)
+- No non-US jobs (US work authorization; US-only search)
 
 ## Architecture
 
@@ -107,7 +107,7 @@ job-hunt-tools/
 - **ATS-sourced jobs**: use the title and company from the ATS API response (structured, reliable).
 - **Search-sourced jobs**: use the scoring model's extracted values (the search result snippet may not have clean title/company).
 
-## Data Flow — email_finder
+## Data Flow — email_finder (built)
 
 0. **Sheet target**: email_finder runs only locally, so it writes to the TEST sheet in `.env` by default. Real use: `SHEET_ID=<prod id> python -m email_finder.main ...`.
 1. **Env check** (`main.py`): `SHEET_ID`, `GOOGLE_APPLICATION_CREDENTIALS`, plus the key of each enabled provider only (`PROSPEO_API_KEY`, `APIFY_TOKEN`, `APOLLO_API_KEY`); `ANTHROPIC_API_KEY` only with `--draft`. Any missing → one error naming all of them, exit 1. Then print `Writing to sheet: <title>`.
@@ -190,14 +190,14 @@ Header-driven like Jobs: `CONTACTS_HEADERS` in `email_finder/sheets_repo.py` lis
 Scorer receives two inputs: `config/candidate.md` (one-page evidence doc) and `config/profile.yaml` (match criteria and evaluation rules).
 
 - **Hard blockers (score 1–2)** — override all score floors:
-  - JD **explicitly** says no visa sponsorship or US citizens only. If the JD doesn't mention visas, that is NOT a blocker. Security clearance is also a blocker. Candidate is on F-1 OPT.
+  - JD **explicitly** says no visa sponsorship or US citizens only. If the JD doesn't mention visas, that is NOT a blocker. Security clearance is also a blocker.
   - Job is based outside the US.
-- **Location within the US is never a penalty.** Greater Seattle area (Seattle, Bellevue, Redmond, Kirkland, Tacoma, Everett) gets a small bonus (+0.25 to +0.5).
+- **Location within the US is never a penalty.** Any location bonus is a personal rule in `config/profile.yaml`.
 - **Score floor of 6** for early-career SWE/FDE/founding/product engineer roles (per `ai_evaluation` rules in `profile.yaml`). Only score below 6 when the JD clearly requires 3+ years AND targets mid/senior/staff/principal, or a hard blocker applies.
   - **Exception (3–5)**: the role's core is a specialty with no evidence in the candidate's background (e.g. embedded firmware, chip design), or the work is mostly outside general software engineering (e.g. QA-only, IT support, sales engineering).
-- **Personal rules live in `profile.yaml`**, not the prompt. The system prompt holds only generic rules (hard blockers, US location never a penalty, facts-only) plus a generic **score calibration** section: bands 9–10 / 7–8 / 6 / 3–5 / 1–2, how to apply them, one example job per band, and snippet-only rules. Personal specifics (F-1 OPT, the Seattle bonus) come from `profile.yaml`; on conflict, profile rules win.
+- **Personal rules live in `profile.yaml`**, not the prompt. The system prompt holds only generic rules (hard blockers, US location never a penalty, facts-only) plus a generic **score calibration** section: bands 9–10 / 7–8 / 6 / 3–5 / 1–2, how to apply them, one example job per band, and snippet-only rules. Personal specifics come from `config/profile.yaml`; on conflict, profile rules win.
 - **Prompt caching**: the system block (prompt + `candidate.md` + `profile.yaml`, ~6,900 tokens on Opus 5.5 (measured; varies by model tokenizer)) is marked `cache_control: ephemeral`. Haiku 4.5's minimum cacheable prompt is 4,096 tokens, so the calibration section is padded with useful content, not filler. If both cache counters come back 0, the scorer logs a warning (prompt likely fell below the minimum).
-- **Scoring model**: `scoring.model` in `settings.yaml`. **October 2026: Claude Opus (`claude-opus-5-5`)**; Haiku 4.5 and Sonnet 5.5 also work. Per-model prices (input, output, cache write, cache read per million tokens) live in the `prices` block.
+- **Scoring model**: `scoring.model` in `settings.yaml`. **Current: Claude Sonnet (`claude-sonnet-5-5`)**, with `force_tool_choice: false`. Haiku 4.5 and Opus 5.5 also work. Per-model prices (input, output, cache write, cache read per million tokens) live in the `prices` block.
 - **Tool call mode** (`scoring.force_tool_choice`, passed in by service): `true` → forced tool call (`tool_choice` = the scoring tool; Haiku). `false` → `tool_choice: auto`, `strict: true` on the tool, and "Always respond by calling the scoring tool." appended to the user message (Sonnet/Opus 5.5 reject a forced `tool_choice`). A response with no tool call = failed job.
 - **One tool schema for all models**: generated from the pydantic model with `additionalProperties: false` and no `minimum`/`maximum` (strict tools reject them).
 - **Pydantic validation**: the tool input is validated against the pydantic schema (`match_score` 1.0–10.0, rounded to one decimal). Invalid response = failed job (skipped, not written to sheet, retried next run).
@@ -226,7 +226,7 @@ Scorer receives two inputs: `config/candidate.md` (one-page evidence doc) and `c
 
 - **Storage**: console output only, kept by GitHub Actions in the run log (90-day default retention). No Runs/Errors tab, no log files, no artifacts.
 - **Never log** JD text, `profile.yaml` / `candidate.md` contents, or secrets. Failed-job lines show the URL + error type + the exception message on one line, truncated to 150 characters.
-- **Fixed prefixes**: key lines start with a fixed uppercase prefix so a month of logs can be grepped: `RUN`, `ATS`, `QUERY`, `FUNNEL`, `DROP`, `JD`, `FAIL`, `SCORES`, `COST`, `ASHBY`.
+- **Fixed prefixes**: key lines start with a fixed uppercase prefix so a month of logs can be grepped: `RUN`, `ATS`, `QUERY`, `SEARCH`, `FUNNEL`, `DROP`, `JD`, `FAIL`, `SCORES`, `COST`, `ASHBY`, `GREENHOUSE`, `LEVER`.
 - **What each run logs**:
 
 | Prefix | Content |
@@ -239,6 +239,8 @@ Scorer receives two inputs: `config/candidate.md` (one-page evidence doc) and `c
 | `DROP` | One line per filtered job. Title drops: the matched exclude keyword, or `no include match`. Location drops: the matched keyword and where it matched (`location` / `title` / `url`). Off-site search hits: `DROP offsite \| <title> \| <url>`. Post-fetch ATS location drops: `DROP location <keyword> (ats-location) \| <title> \| <url>`. Experience drops: `DROP experience N \| <phrase> \| <title> \| <url>`. Over-cap jobs: `DROP cap` lines with titles, only when the over-cap count > 0. Any `\|` inside a title is written as `/` so the ` \| ` separators stay parseable |
 | `JD` | Source counts: full fetched, snippet fallback, ATS full |
 | `ASHBY` | A search-found Ashby job whose board was unavailable or whose job id was not on the board; it falls back to a plain page fetch |
+| `GREENHOUSE` / `LEVER` | A search-found Greenhouse or Lever job whose single-job API call failed; it falls back to a plain page fetch |
+| `SEARCH` | Warning when unresolved Google `/goto` (and opaque `/url`) redirects are more than 30% of search results. Those results are skipped |
 | `SCORES` | Histogram: 8–10, 6–7.9, 3–5.9, 1–2.9 |
 | `COST` | Tokens: input, output, cache read, cache write; estimated cost from per-model prices in `settings.yaml` (never hardcoded) |
 | `RUN` (end) | Elapsed time |
@@ -284,12 +286,12 @@ Scorer receives two inputs: `config/candidate.md` (one-page evidence doc) and `c
 | `ats_client.py` separate from `jd_client.py` | One client per external system: ats_client handles Greenhouse/Lever/Ashby APIs (list call returns jobs with JD text, one call per company); jd_client handles plain HTTP fetches for search-sourced job pages |
 | title/company from source when available | ATS APIs return structured data; scoring-model extraction only needed for search results |
 | Pydantic validation on scorer output | Catches malformed model responses before they hit the sheet |
-| Scoring model is a setting; tool mode is a setting (`force_tool_choice`) | Sonnet/Opus 5.5 reject a forced `tool_choice`; one code path supports both. Opus for October |
+| Scoring model is a setting; tool mode is a setting (`force_tool_choice`) | Sonnet/Opus 5.5 reject a forced `tool_choice`; one code path supports both. Current model is Sonnet (`claude-sonnet-5-5`) |
 | `config/` at repo root, gitignored | Personal files (profile.yaml, candidate.md) stay out of repo; .example versions document format |
 | `settings.yaml` committed | Caps, filter keywords, and lookback days are config, not secrets |
 | Append-only sheet writes | User's checkboxes and manual edits must survive every run |
 | Code appends "" (blank) for checkbox columns | Pre-filled checkboxes on empty rows count as data, so the append API writes after them (row 1001 in Task 1 testing). Checkboxes are never pre-filled; marking applied/contacted is manual |
-| No `remote` column | User is open to all work modes; included in location text |
+| No `remote` column | Work mode stays in the location text |
 | Write "not found" email rows | Prevents re-spending provider credits on the same person |
 | Email providers: Prospeo → Apify, Apollo optional (`providers` in `email_finder/settings.yaml`) | Oct 5 2026 tests: Prospeo is free (100 credits/month) and returns an email status; Apify's `vulnv/linkedin-email-finder` catches Prospeo's no-matches, pay per email found (~$0.026) from the $5/month free credit, but returns no status or title (rows marked `unverified`). Apollo `people/match` and `bulk_match` return 403 `API_INACCESSIBLE` on the free plan, so it stays a disabled provider for a future paid plan |
 | email_finder stops on unexpected provider errors; unresolved URLs not written | Only a real no-match becomes a "not found" row, so a bad key, 429 or outage never marks people as not found; pending URLs are retried next run |
@@ -299,7 +301,7 @@ Scorer receives two inputs: `config/candidate.md` (one-page evidence doc) and `c
 | Senior/Sr excluded in title filter and queries | Oct 2026 sheet review: mostly wasted scoring |
 | Newest jobs scored first | If capped, better to score fresh postings |
 | US-only: two-layer filtering | Cheap keyword filter catches obvious non-US before burning scorer credits; scorer catches the rest |
-| Location within the US is never a penalty | Candidate is open to anywhere in the US; only Greater Seattle gets a small bonus |
+| Location within the US is never a penalty | A US location is never a penalty; any location bonus lives in `config/profile.yaml` |
 | Serper (serper.dev) as search API, not Brave | Brave's "past day" filter returned far weaker results in manual testing; Serper wraps Google and gives better recency |
 | No Google scraping with Selenium | Blocked quickly (CAPTCHAs, especially from GitHub Actions IPs), against Google ToS, and brittle. Serper is the paid, reliable alternative |
 | JD snippet fallback for search results | Many career pages are JavaScript-heavy and return no text on plain fetch. Scoring from title + snippet is better than skipping the job entirely |
@@ -311,7 +313,7 @@ Scorer receives two inputs: `config/candidate.md` (one-page evidence doc) and `c
 ## Open Risks
 
 - **Serper query syntax**: Google accepts `site:` + `OR` + brackets in the browser. **Resolved in Task 2**: Serper passes them through correctly (returned links match the `site:` domain).
-- **Serper API quota**: Serper has monthly credit limits. Each query page is one credit at `num=10`. Ceiling = enabled queries × `max_pages_per_query` × 2 runs/day (23 × 4 × 2 = 184 credits/day with current config). The `QUERY` log lines report total Serper calls per run.
+- **Serper API quota**: Serper has monthly credit limits. Each query page is one credit at `num=10`. Ceiling = enabled queries × `max_pages_per_query` × 2 runs/day (20 × 4 × 2 = 160 credits/day with current config; Sequoia Capital, Insight Partners, and Microsoft are disabled). The `QUERY` log lines report total Serper calls per run.
 - **ATS API rate limits**: Greenhouse/Lever/Ashby public APIs may have undocumented rate limits. If companies.yaml grows large, requests may get throttled.
 - **ATS slug drift**: company slugs in companies.yaml can change if a company rebrands or migrates ATS. Broken slugs fail silently (empty results, not errors). Periodic manual check needed.
 - **JD fetch failures**: some company career pages block automated requests or require JavaScript. No headless browser is in scope — those jobs fall back to snippet-based scoring instead.

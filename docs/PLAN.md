@@ -349,10 +349,10 @@ ScoreResult:
 ```
 
 **What scoring_client.py exposes**:
-- `score_job(jd_text: str, jd_source: str, candidate_md: str, profile_yaml: str, model: str, max_tokens: int, max_jd_chars: int, force_tool_choice: bool, title_hint: str = "", company_hint: str = "") -> ScoreResult` — one Claude call to the scoring tool, validated with pydantic. `force_tool_choice=True`: forced tool call (Haiku). `False`: `tool_choice: auto`, `strict: true` on the tool, and "Always respond by calling the scoring tool." appended to the user message (Sonnet/Opus 5.5 reject forced tool_choice); no tool call → failed job. One tool schema for all models: `additionalProperties: false`, no `minimum`/`maximum` (pydantic still enforces 1.0–10.0). Scoring model for October: `claude-opus-5-5`. JD truncated to `max_jd_chars`. `title_hint` / `company_hint` passed for ATS jobs so the scoring model doesn't need to extract them. Snippet inputs get an extra note in the user message.
+- `score_job(jd_text: str, jd_source: str, candidate_md: str, profile_yaml: str, model: str, max_tokens: int, max_jd_chars: int, force_tool_choice: bool, title_hint: str = "", company_hint: str = "") -> ScoreResult` — one Claude call to the scoring tool, validated with pydantic. `force_tool_choice=True`: forced tool call (Haiku). `False`: `tool_choice: auto`, `strict: true` on the tool, and "Always respond by calling the scoring tool." appended to the user message (Sonnet/Opus 5.5 reject forced tool_choice); no tool call → failed job. One tool schema for all models: `additionalProperties: false`, no `minimum`/`maximum` (pydantic still enforces 1.0–10.0). Scoring model: `claude-sonnet-5-5` (`scoring.model`). JD truncated to `max_jd_chars`. `title_hint` / `company_hint` passed for ATS jobs so the scoring model doesn't need to extract them. Snippet inputs get an extra note in the user message.
 - `model`, `force_tool_choice`, `max_tokens`, `max_jd_chars` come from `settings.yaml` `scoring` block, passed in by service.py (the client never reads settings.yaml). Add these keys in this task.
 - **Prompt caching**: the system block (generic rules + calibration + `candidate.md` + `profile.yaml`, ~6,900 tokens on Opus 5.5 (measured; varies by model tokenizer)) has `cache_control: ephemeral`. Haiku 4.5's cache minimum is 4,096 tokens. Each call logs input / output / cache-creation / cache-read tokens; a warning is logged when both cache counters are 0.
-- **Calibration section** in the prompt: bands (9–10, 7–8, 6, 3–5, 1–2), how to apply them, one example per band, snippet-only rules. Generic only — personal rules (F-1 OPT, Seattle bonus) live in `profile.yaml`; profile wins on conflict.
+- **Calibration section** in the prompt: bands (9–10, 7–8, 6, 3–5, 1–2), how to apply them, one example per band, snippet-only rules. Generic only — personal rules live in `config/profile.yaml`; profile wins on conflict.
 
 **Verification**:
 ```bash
@@ -365,7 +365,7 @@ jd = '''[paste a short JD or use a known one]'''
 candidate = open('config/candidate.md').read()
 profile = open('config/profile.yaml').read()
 result = score_job(jd, 'full', candidate, profile,
-                   model='claude-opus-5-5', max_tokens=2048, max_jd_chars=15000,
+                   model='claude-sonnet-5-5', max_tokens=2048, max_jd_chars=15000,
                    force_tool_choice=False)
 print(result)
 "
@@ -528,16 +528,18 @@ pytest -v
 ### Post-Task-8 changes
 
 Built after Task 8; DESIGN.md has the details.
-- `job_scanner/experience_filter.py` (+ `tests/test_experience_filter.py`): drops jobs whose JD requires more than `experience_filter.max_years_required` years; adds `DROP experience` lines and the `experience dropped` funnel stage.
+- `job_scanner/experience_filter.py` (+ `tests/test_experience_filter.py`): drops jobs whose JD requires more than `experience_filter.max_years_required` years. Ignores "years of age", "aged N", and any number >= 15. Adds `DROP experience` lines and the `experience dropped` funnel stage.
 - `url_utils.platform_for_url`: fills the new `platform` column (ATS jobs use the ATS name).
 - Header-driven Jobs columns: `sheets_repo.get_columns` reads the header row once per run and maps the 14 headers by name; a missing header is fatal before anything is written. `get_existing_urls` reads the `url` column; `append_jobs` takes rows as dicts keyed by header name.
 - Ashby API JD for search jobs: `jobs.ashbyhq.com/<slug>/<job id>` search results get their JD from `ats_client.get_ashby_board` (board cached per slug per run), falling back to a plain fetch with an `ASHBY` log line.
-- Site guard: queries with `site:<domain/path>` drop results whose host does not end with that domain (`DROP offsite`; `off-site` on the query line and in `FUNNEL`; still counted in `found`).
+- Site guard: queries with `site:<domain/path>` drop results whose host does not end with that domain (`DROP offsite`; `off-site` on the query line and in `FUNNEL`; still counted in `found`). A `google.com` `/goto` result, or a `/url` link whose `url` or `q` value does not start with `http`, is an unresolved redirect (`DROP redirect`, counted as `redirect`, not scored). Above 30% of search results, one `SEARCH` warning. A `/url` target that starts with `http` is unwrapped.
 - Post-fetch location: search hits on Ashby, Greenhouse (`get_greenhouse_job`), and Lever (`get_lever_job`) take JD + location from the posting API (counted "full fetched"; API failure falls back to the page fetch). A structured location is checked with `location_drop_reason` in ATS mode; drops are `DROP location <kw> (ats-location)` and `location dropped post-fetch` in the eligible equation.
 
 ---
 
 ## Task 9: email_finder (Prospeo → Apify chain + Outreach + CLI)
+
+**Status**: Built. Providers in use are Prospeo then Apify (`providers: [prospeo, apify]`). Apollo is implemented and left out of `providers` (free plan returns 403 `API_INACCESSIBLE`). CLI: `python -m email_finder.main [urls ...] [--file PATH] [--draft]`. Contacts columns: `contacted`, `name`, `company`, `title`, `email`, `email_status`, `email_source`, `linkedin_url`, `notes`, `outreach_line`, `date_found` (header-driven; all 11 required).
 
 **Goal**: Build the email_finder module: a batch CLI that takes LinkedIn profile URLs, looks each one up through an ordered chain of email providers (Prospeo, then Apify; Apollo available but disabled), optionally drafts a LinkedIn connection note with Claude (stored in `outreach_line`), and appends one row per URL to the Contacts tab.
 
