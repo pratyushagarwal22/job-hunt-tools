@@ -349,6 +349,17 @@ def _drop_stage(job: dict, settings: dict) -> str | None:
 
 def _drop_ats_location(job: dict, location: str | None, settings: dict) -> bool:
     """True when a structured ATS location is outside the US."""
+    workday = job.get("workday") or {}
+    country = workday.get("country")
+    if country:
+        extras = workday.get("additional_locations") or []
+        if country != "United States of America" and not extras:
+            logger.info(
+                "DROP location %s (workday-country) | %s | %s",
+                country, _log_title(job), job["url"],
+            )
+            return True
+        return False
     if not location:
         return False
     location_cfg = settings["location_filter"]
@@ -456,7 +467,7 @@ def _get_jd(job: dict, settings: dict, ashby_boards: dict) -> tuple[str, str, st
         if job["jd_text"]:
             return job["jd_text"], "full", None
         return f"{job['title']}\n{job['location']}", "snippet", None
-    fetched = _search_ats_posting(job["url"], settings, ashby_boards)
+    fetched = _search_ats_posting(job, settings, ashby_boards)
     location = None
     if fetched is not None:
         text, location = fetched
@@ -470,9 +481,12 @@ def _get_jd(job: dict, settings: dict, ashby_boards: dict) -> tuple[str, str, st
     return jd_text, jd_source, location
 
 
-def _search_ats_posting(url: str, settings: dict, ashby_boards: dict) -> tuple[str, str | None] | None:
-    """(jd_text, location) from Ashby, Greenhouse, or Lever. None means fall back with no location."""
+def _search_ats_posting(job: dict, settings: dict, ashby_boards: dict) -> tuple[str, str | None] | None:
+    """(jd_text, location) from Ashby, Greenhouse, Lever, or Workday. None means fall back with no location."""
+    url = job["url"]
     timeout = settings["request_timeout_seconds"]
+    if ats_client.workday_api_url(url):
+        return _workday_posting(job, url, timeout)
     ashby = _ASHBY_JOB_URL.match(url)
     if ashby is not None:
         return _ashby_posting(ashby.group(1), ashby.group(2).lower(), timeout, ashby_boards)
@@ -487,6 +501,19 @@ def _search_ats_posting(url: str, settings: dict, ashby_boards: dict) -> tuple[s
             "lever", lever.group(1), lever.group(2), timeout, ats_client.get_lever_job
         )
     return None
+
+
+def _workday_posting(job: dict, url: str, timeout: float) -> tuple[str, str | None] | None:
+    try:
+        posting = ats_client.get_workday_job(url, timeout)
+    except ats_client.AtsError as exc:
+        logger.info("WORKDAY job %s unavailable (%s); falling back", url, exc.detail)
+        return None
+    text = (posting.get("jd_text") or "").strip()
+    if not text:
+        logger.info("WORKDAY job %s unavailable (empty description); falling back", url)
+    job["workday"] = posting
+    return text, posting.get("location")
 
 
 def _one_posting(ats: str, slug: str, job_id: str, timeout: float, fetch) -> tuple[str, str | None] | None:
@@ -547,7 +574,17 @@ def _score_to_row(
     else:
         title, company, location = result.title, result.company, result.location
 
+    workday = job.get("workday")
     posted = job["posted"]
+    posted_date = date_utils.format_posted_date(posted, settings["timezone"]) if posted else ""
+    if workday:
+        title = workday.get("title") or title
+        parts = [workday.get("location") or ""]
+        parts.extend(workday.get("additional_locations") or [])
+        joined = "; ".join(part for part in parts if part)
+        location = joined or location
+        if workday.get("start_date"):
+            posted_date = workday["start_date"]
     row = dict(
         applied="",
         match_score=result.match_score,
@@ -560,7 +597,7 @@ def _score_to_row(
         jd_source=jd_source,
         core_requirements=result.core_requirements,
         reason=result.reason,
-        posted_date=date_utils.format_posted_date(posted, settings["timezone"]) if posted else "",
+        posted_date=posted_date,
         date_found=date_found,
         source_query=job["source_query"],
     )

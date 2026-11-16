@@ -2,7 +2,7 @@
 
 ## What this does
 
-Two small Python tools that feed one Google Sheet. **`job_scanner`** (live) runs twice a day on GitHub Actions: it polls tracked company boards on Greenhouse, Lever and Ashby, runs `site:` searches through the Serper API, dedups against the sheet, drops jobs by title, location and required years of experience, scores the rest with Claude Sonnet (`claude-sonnet-5-5`) against your profile, and appends the scored rows to the sheet's `Jobs` tab. Unresolved Google redirects (`google.com/goto`, or a `/url` link whose target does not start with `http`) are counted as redirects and skipped. After a Greenhouse, Lever, or Ashby single-job fetch, the structured location is checked and a non-US job is dropped before scoring. **`email_finder`** (built, local CLI) takes LinkedIn profile URLs (arguments, `--file`, or `email_finder/linkedin-profiles.txt`), looks up each email through Apollo, then Prospeo, then Apify, and appends one row per URL to the `Contacts` tab. With `--draft` it also writes a short LinkedIn connection note into each found row's `outreach_line`; outreach emails are written by hand.
+Two small Python tools that feed one Google Sheet. **`job_scanner`** (live) runs twice a day on GitHub Actions: it polls tracked company boards on Greenhouse, Lever and Ashby, runs `site:` searches through the Serper API, dedups against the sheet, drops jobs by title, location and required years of experience, scores the rest with Claude Sonnet (`claude-sonnet-5-5`) against your profile, and appends the scored rows to the sheet's `Jobs` tab. Search also finds Workday jobs; the JD, location, country and start date come from Workday's job API. Unresolved Google redirects (`google.com/goto`, or a `/url` link whose target does not start with `http`) are counted as redirects and skipped. After a Greenhouse, Lever, or Ashby single-job fetch, the structured location is checked and a non-US job is dropped before scoring. **`email_finder`** (built, local CLI) takes LinkedIn profile URLs (arguments, `--file`, or `email_finder/linkedin-profiles.txt`), looks up each email through Apollo, then Prospeo, then Apify, and appends one row per URL to the `Contacts` tab. With `--draft` it also writes a short LinkedIn connection note into each found row's `outreach_line`; outreach emails are written by hand.
 
 All commands below are run from the repo root with the virtual environment active.
 
@@ -420,6 +420,7 @@ Key lines start with a fixed uppercase prefix (after the timestamp and logger na
 | `DROP` | One line per filtered job: `DROP title <keyword or "no include match">`, `DROP location <keyword> (<location/title/url>)`, `DROP location <keyword> (ats-location)`, `DROP redirect`, `DROP offsite`, `DROP experience <years> \| <phrase>`, `DROP cap`. Fields are separated by ` \| ` |
 | `SEARCH` | Warning when unresolved Google `/goto` (and opaque `/url`) redirects are more than 30% of search results. Those results are skipped |
 | `GREENHOUSE` / `LEVER` | A search-found Greenhouse or Lever job whose single-job API call failed; the run falls back to a plain page fetch |
+| `WORKDAY` | A search-found Workday job whose Workday API call failed; the run falls back to a plain page fetch |
 | `JD` | JD source counts: full fetched, snippet fallback, ATS full |
 | `FAIL` | `FAIL search` (query, page, HTTP status) or `FAIL job` (URL, error type, message truncated to 150 chars) |
 | `SCORES` | Score histogram: 8-10, 6-7.9, 3-5.9, 1-2.9 |
@@ -441,7 +442,7 @@ gh run view <id> --log
 Export the key lines from the last 60 runs into one file for review:
 
 ```bash
-gh run list --workflow scan.yaml --limit 60 --json databaseId -q '.[].databaseId' | xargs -I{} gh run view {} --log | grep -E "RUN|ATS|QUERY|FUNNEL|DROP|JD|FAIL|SCORES|COST|ASHBY|SEARCH|GREENHOUSE|LEVER" > review.txt
+gh run list --workflow scan.yaml --limit 60 --json databaseId -q '.[].databaseId' | xargs -I{} gh run view {} --log | grep -E "RUN|ATS|QUERY|FUNNEL|DROP|JD|FAIL|SCORES|COST|ASHBY|SEARCH|GREENHOUSE|LEVER|WORKDAY" > review.txt
 ```
 
 Like `run.log`, `review.txt` is gitignored; delete it when done to keep the folder tidy.
@@ -545,7 +546,7 @@ Newer models' tokenizers count more tokens for the same text than older ones, so
 
 ### Search (Serper)
 
-Each query page is **1 Serper credit at `num=10`**. The ceiling is enabled queries × `max_pages_per_query` × 2 runs a day: 20 × 4 × 2 = 160 credits/day with the current config (Sequoia Capital, Insight Partners, and Microsoft are disabled). Pagination stops early on empty pages, so typical spend is lower. The `QUERY total Serper calls` line reports the real count per run.
+Each query page is **1 Serper credit at `num=10`**. The ceiling is enabled queries × `max_pages_per_query` × 2 runs a day: 21 × 4 × 2 = 168 credits/day with the current config (Sequoia Capital, Insight Partners, and Microsoft are disabled). Pagination stops early on empty pages, so typical spend is lower. The `QUERY total Serper calls` line reports the real count per run.
 
 ATS polling (Greenhouse, Lever, Ashby) uses free public APIs.
 

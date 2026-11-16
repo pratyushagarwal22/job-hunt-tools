@@ -338,6 +338,18 @@ def test_workday_api_url_drops_locale_and_apply():
     assert workday_api_url(_WD_JOB + "/apply") == _WD_API
 
 
+def test_workday_api_url_cuts_at_first_apply():
+    url = (
+        "https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite/job/US-CA-Santa-Clara/"
+        "Network-Software-Engineer--Automation-and-Intelligence_JR2028694/apply/autofillWithResume"
+        "?jobFamilyGroup=0c40f6bd1d8f10ae43ffaefd46dc7e78"
+    )
+    assert workday_api_url(url) == (
+        "https://nvidia.wd5.myworkdayjobs.com/wday/cxs/nvidia/NVIDIAExternalCareerSite/job/"
+        "US-CA-Santa-Clara/Network-Software-Engineer--Automation-and-Intelligence_JR2028694"
+    )
+
+
 def test_workday_api_url_jobs_details_form():
     url = f"{_WD}/en-US/External/jobs/details/SWE_R1/apply"
     assert workday_api_url(url) == f"{_WD}/wday/cxs/acme/External/job/SWE_R1"

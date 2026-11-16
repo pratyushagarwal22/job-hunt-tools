@@ -53,28 +53,43 @@ def platform_for_url(url: str) -> str:
 
 def normalize_url(url: str) -> str:
     parts = urlsplit(url.strip())
-    kept = [pair for pair in parts.query.split("&") if pair and not _is_tracking(pair)]
+    host = (parts.hostname or "").lower()
+    workday = _is_workday(host)
+    if workday:
+        kept = []
+    else:
+        kept = [pair for pair in parts.query.split("&") if pair and not _is_tracking(pair)]
     return urlunsplit(
         (
             parts.scheme.lower(),
             parts.netloc.lower(),
-            _strip_path(parts.path, (parts.hostname or "").lower()),
+            _workday_path(parts.path) if workday else _strip_path(parts.path),
             "&".join(kept),
             "",
         )
     )
 
 
-def _strip_path(path: str, host: str = "") -> str:
+def _is_workday(host: str) -> bool:
+    return host == _WORKDAY_HOST or host.endswith("." + _WORKDAY_HOST)
+
+
+def _strip_path(path: str) -> str:
     path = path.rstrip("/")
     while path.lower().endswith(_APPLY_SEGMENT):
         path = path[: -len(_APPLY_SEGMENT)].rstrip("/")
-    if host == _WORKDAY_HOST or host.endswith("." + _WORKDAY_HOST):
-        parts = path.split("/")
-        if len(parts) > 1 and _LOCALE.fullmatch(parts[1] or ""):
-            path = "/" + "/".join(parts[2:])
-            path = path.rstrip("/")
     return path
+
+
+def _workday_path(path: str) -> str:
+    """Cut at the first "apply" segment (dropping it and the rest), then drop a leading locale."""
+    segments = path.split("/")
+    lowered = [seg.lower() for seg in segments]
+    if "apply" in lowered:
+        segments = segments[: lowered.index("apply")]
+    if len(segments) > 1 and _LOCALE.fullmatch(segments[1] or ""):
+        segments = [segments[0]] + segments[2:]
+    return "/".join(segments).rstrip("/")
 
 
 def _is_tracking(pair: str) -> bool:

@@ -62,6 +62,10 @@ queries:
     query: 'site:breezy.hr ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad") -intitle:Staff -intitle:Principal -intitle:Director -intitle:Senior -intitle:Sr'
     enabled: true
 
+  - name: Workday
+    query: 'site:myworkdayjobs.com ("Software Engineer" OR "Software Developer" OR "Software Development Engineer" OR "Forward Deployed Engineer" OR "Founding Engineer" OR "Product Engineer" OR "AI Engineer" OR "New Grad") -intitle:Staff -intitle:Principal -intitle:Director -intitle:Senior -intitle:Sr'
+    enabled: true
+
 # ---------------------------------------------------------------------------
 # Company sites — big companies with their own career domains.
 # Same title list as above. One query per company.

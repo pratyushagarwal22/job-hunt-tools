@@ -133,8 +133,9 @@ def workday_api_url(url: str) -> str | None:
     if not tenant or host == _WORKDAY_HOST.lstrip("."):
         return None
     segments = [seg for seg in parts.path.split("/") if seg]
-    while segments and segments[-1].lower() == "apply":
-        segments.pop()
+    lowered = [seg.lower() for seg in segments]
+    if "apply" in lowered:
+        segments = segments[: lowered.index("apply")]
     if segments and _LOCALE.fullmatch(segments[0]):
         segments = segments[1:]
     site, rest = _workday_job_path(segments)

@@ -74,12 +74,14 @@ def _score_result(**overrides) -> ScoreResult:
 class Harness:
     def __init__(self, monkeypatch, *, settings=None, queries=None, company_sites=None,
                  companies=None, search_pages=None, ats_jobs=None, existing=(), jd=None,
-                 score=None, ashby_boards=None, greenhouse_jobs=None, lever_jobs=None):
+                 score=None, ashby_boards=None, greenhouse_jobs=None, lever_jobs=None,
+                 workday_jobs=None):
         self.search_pages = search_pages or {}
         self.ats_jobs = ats_jobs or {}
         self.ashby_boards = ashby_boards or {}
         self.greenhouse_jobs = greenhouse_jobs or {}
         self.lever_jobs = lever_jobs or {}
+        self.workday_jobs = workday_jobs or {}
         self.ashby_calls = []
         self.existing = set(existing)
         self.jd = jd or {}
@@ -110,6 +112,7 @@ class Harness:
         monkeypatch.setattr(service.ats_client, "get_ashby_board", self._ashby_board)
         monkeypatch.setattr(service.ats_client, "get_greenhouse_job", self._greenhouse_job)
         monkeypatch.setattr(service.ats_client, "get_lever_job", self._lever_job)
+        monkeypatch.setattr(service.ats_client, "get_workday_job", self._workday_job)
         monkeypatch.setattr(service.jd_client, "fetch_jd", self._fetch_jd)
         monkeypatch.setattr(service.scoring_client, "score_job", self._score)
         monkeypatch.setattr(service.sheets_repo, "get_columns", self._columns)
@@ -150,6 +153,12 @@ class Harness:
 
     def _lever_job(self, slug, posting_id, timeout=15):
         return self._one_job(self.lever_jobs, (slug, str(posting_id)), "lever")
+
+    def _workday_job(self, url, timeout):
+        job = self.workday_jobs.get(url, AtsError("workday", "", "HTTP 404"))
+        if isinstance(job, Exception):
+            raise job
+        return job
 
     def _fetch_jd(self, url, timeout, min_chars):
         self.jd_calls.append((url, timeout, min_chars))
@@ -691,6 +700,140 @@ def test_ats_job_api_failure_falls_back_to_jd_client(monkeypatch):
 
     assert [url for url, _, _ in h.jd_calls] == [GH_URL]
     assert h.score_calls[0]["jd_text"] == "Fetched full JD for " + GH_URL
+
+
+WD_URL = "https://acme.wd5.myworkdayjobs.com/External/job/SWE_R1"
+
+
+def _workday(**overrides):
+    posting = dict(
+        title="WD Title",
+        jd_text="Full workday JD",
+        location="Remote - USA",
+        additional_locations=["US, TX, Austin"],
+        country="United States of America",
+        start_date="2026-10-19",
+    )
+    posting.update(overrides)
+    return posting
+
+
+def _funnel_adds_up(line: str) -> bool:
+    numbers = [int(n) for n in re.findall(r"\d+", line)]
+    found, redirect, offsite, sheet, in_run, no_url, new = numbers[:7]
+    title, location, eligible = numbers[7:10]
+    post, cap, experience, scored, failed = numbers[10:15]
+    return (
+        found == redirect + offsite + sheet + in_run + no_url + new
+        and new == title + location + eligible
+        and eligible == post + cap + experience + scored + failed
+    )
+
+
+def test_workday_success_uses_structured_fields(monkeypatch, caplog):
+    h = _ats_search(monkeypatch, WD_URL, dict(workday_jobs={WD_URL: _workday()}))
+
+    with caplog.at_level("INFO", logger="job_scanner"):
+        service.run_pipeline(None)
+
+    assert h.jd_calls == []
+    assert h.score_calls[0]["jd_text"] == "Full workday JD"
+    row = h.rows[0]
+    assert row["title"] == "WD Title"
+    assert row["company"] == "Haiku Co"
+    assert row["location"] == "Remote - USA; US, TX, Austin"
+    assert row["posted_date"] == "2026-10-19"
+    assert row["platform"] == "workday"
+    assert _messages(caplog, "JD") == ["JD full fetched 1 | snippet fallback 0 | ATS full 0"]
+    assert _funnel_adds_up(_messages(caplog, "FUNNEL")[0])
+
+
+def test_workday_api_error_falls_back_to_plain_fetch(monkeypatch, caplog):
+    h = _ats_search(
+        monkeypatch, WD_URL,
+        dict(workday_jobs={WD_URL: AtsError("workday", "", "HTTP 403")}),
+    )
+
+    with caplog.at_level("INFO", logger="job_scanner"):
+        service.run_pipeline(None)
+
+    assert _messages(caplog, "WORKDAY") == [
+        f"WORKDAY job {WD_URL} unavailable (HTTP 403); falling back"
+    ]
+    assert [url for url, _, _ in h.jd_calls] == [WD_URL]
+    assert h.rows[0]["title"] == "Haiku Title"
+    assert h.rows[0]["location"] == "Haiku Loc"
+    assert h.rows[0]["company"] == "Haiku Co"
+
+
+def test_workday_empty_description_keeps_fields(monkeypatch, caplog):
+    h = _ats_search(
+        monkeypatch, WD_URL,
+        dict(workday_jobs={WD_URL: _workday(jd_text="")}),
+    )
+
+    with caplog.at_level("INFO", logger="job_scanner"):
+        service.run_pipeline(None)
+
+    assert _messages(caplog, "WORKDAY") == [
+        f"WORKDAY job {WD_URL} unavailable (empty description); falling back"
+    ]
+    assert h.score_calls[0]["jd_text"] == "Fetched full JD for " + WD_URL
+    row = h.rows[0]
+    assert row["title"] == "WD Title"
+    assert row["location"] == "Remote - USA; US, TX, Austin"
+    assert row["posted_date"] == "2026-10-19"
+
+
+def test_workday_non_us_country_without_extras_dropped(monkeypatch, caplog):
+    h = _ats_search(
+        monkeypatch, WD_URL,
+        dict(workday_jobs={WD_URL: _workday(
+            country="Germany", location="Berlin", additional_locations=[])}),
+    )
+
+    with caplog.at_level("INFO", logger="job_scanner"):
+        summary = service.run_pipeline(None)
+
+    assert h.score_calls == []
+    assert summary["scored"] == 0
+    assert _messages(caplog, "DROP location") == [
+        f"DROP location Germany (workday-country) | Software Engineer | {WD_URL}"
+    ]
+    line = _messages(caplog, "FUNNEL")[0]
+    assert "location dropped post-fetch 1" in line
+    assert _funnel_adds_up(line)
+
+
+def test_workday_non_us_country_with_extra_location_kept(monkeypatch, caplog):
+    h = _ats_search(
+        monkeypatch, WD_URL,
+        dict(workday_jobs={WD_URL: _workday(
+            country="Germany", additional_locations=["US, CA, Santa Clara"])}),
+    )
+
+    with caplog.at_level("INFO", logger="job_scanner"):
+        service.run_pipeline(None)
+
+    assert h.score_calls[0]["jd_text"] == "Full workday JD"
+    assert "workday-country" not in caplog.text
+    assert h.rows[0]["location"] == "Remote - USA; US, CA, Santa Clara"
+
+
+def test_workday_without_country_uses_ats_location_check(monkeypatch, caplog):
+    h = _ats_search(
+        monkeypatch, WD_URL,
+        dict(workday_jobs={WD_URL: _workday(
+            country=None, location="Bengaluru, India", additional_locations=[])}),
+    )
+
+    with caplog.at_level("INFO", logger="job_scanner"):
+        service.run_pipeline(None)
+
+    assert h.score_calls == []
+    assert _messages(caplog, "DROP location") == [
+        f"DROP location India (ats-location) | Software Engineer | {WD_URL}"
+    ]
 
 
 def test_non_ashby_search_url_skips_ashby_api(monkeypatch):

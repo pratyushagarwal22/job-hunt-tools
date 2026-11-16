@@ -559,7 +559,7 @@ Built after Task 8; DESIGN.md has the details.
 - `get_workday_job(url, timeout) -> dict` with `title`, `jd_text`, `location`, `additional_locations: list[str]`, `country: str | None`, `start_date: str | None`. Browser User-Agent, `Accept: application/json`. Non-Workday URL, request error, non-2xx, non-JSON, or missing `jobPostingInfo` → `AtsError` (status or error type only, never the body). `jd_text` = `jobDescription` HTML run through `_html_to_text`.
 
 **url_utils.py**:
-- On `*.myworkdayjobs.com` hosts, `normalize_url` drops a leading `xx-XX` locale path segment (so `/en-US/` and no-locale URLs dedup).
+- On `*.myworkdayjobs.com` hosts, `normalize_url` drops a leading `xx-XX` locale path segment (so `/en-US/` and no-locale URLs dedup), cuts the path at the first `apply` segment (case-insensitive, dropping it and everything after), and drops all query params. `workday_api_url` uses the same first-`apply` cut. Non-Workday URLs are unchanged.
 - Add `locations` to the stripped query params (all hosts). `location` stays stripped.
 - Remove the `nvidia.wd5.myworkdayjobs.com` → `company_site` mapping so every Workday host is `workday`. Existing sheet rows still dedup because `get_existing_urls` normalizes on read.
 

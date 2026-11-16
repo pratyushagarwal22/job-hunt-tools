@@ -98,6 +98,32 @@ def test_strips_locations_param():
     assert normalize_url(url) == "https://example.com/jobs/1?keep=1"
 
 
+NVIDIA_APPLY_URL = (
+    "https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite/job/US-CA-Santa-Clara/"
+    "Network-Software-Engineer--Automation-and-Intelligence_JR2028694/apply/autofillWithResume"
+    "?jobFamilyGroup=0c40f6bd1d8f10ae43ffaefd46dc7e78"
+)
+NVIDIA_JOB_URL = (
+    "https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite/job/US-CA-Santa-Clara/"
+    "Network-Software-Engineer--Automation-and-Intelligence_JR2028694"
+)
+
+
+def test_workday_cuts_at_first_apply_and_drops_params():
+    assert normalize_url(NVIDIA_APPLY_URL) == NVIDIA_JOB_URL
+
+
+def test_workday_drops_all_query_params():
+    url = "https://acme.wd1.myworkdayjobs.com/External/job/SWE_R1?source=x&id=9&gh_jid=1"
+    assert normalize_url(url) == "https://acme.wd1.myworkdayjobs.com/External/job/SWE_R1"
+
+
+def test_non_workday_keeps_params_and_later_apply_path():
+    assert normalize_url("https://company.com/careers?gh_jid=123") == "https://company.com/careers?gh_jid=123"
+    url = "https://example.com/apply/jobs/1?id=9"
+    assert normalize_url(url) == url
+
+
 def test_strips_trailing_apply_nvidia_keeps_path_case():
     url = (
         "https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite/job/"
